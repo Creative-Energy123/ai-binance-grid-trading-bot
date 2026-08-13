@@ -4,6 +4,7 @@ import json
 import logging
 from datetime import date, datetime, timezone
 
+from ccxt.base.errors import ExchangeError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -123,22 +124,42 @@ async def _rebuild_levels(db: AsyncSession, config: GridConfig) -> None:
     )
     mid = (config.lower_price + config.upper_price) / 2
     qty_budget = config.capital_usdt / config.grid_count
-    for i, price in enumerate(prices):
-        side = "buy" if price <= mid else "sell"
-        qty = qty_budget / price if price else 0
-        order = await binance_client.create_limit_order(config.symbol, side, qty, price)
-        db.add(
-            GridLevel(
-                config_id=config.id,
-                level_index=i,
-                price=price,
-                side=side,
-                quantity=qty,
-                order_id=str(order.get("id")),
-                status="open" if order.get("status") in ("open", "new", None) or order.get("simulated") else str(order.get("status")),
+    placed_orders: list[tuple[str, str]] = []
+    try:
+        for i, price in enumerate(prices):
+            side = "buy" if price <= mid else "sell"
+            qty = qty_budget / price if price else 0
+            order = await binance_client.create_limit_order(config.symbol, side, qty, price)
+            order_id = order.get("id")
+            if order_id is not None:
+                placed_orders.append((str(order_id), config.symbol))
+            db.add(
+                GridLevel(
+                    config_id=config.id,
+                    level_index=i,
+                    price=price,
+                    side=side,
+                    quantity=qty,
+                    order_id=str(order_id) if order_id is not None else None,
+                    status="open"
+                    if order.get("status") in ("open", "new", None) or order.get("simulated")
+                    else str(order.get("status")),
+                )
             )
-        )
-    await db.commit()
+        await db.commit()
+    except ExchangeError as exc:
+        logger.exception("Grid order placement failed: %s", exc)
+        for order_id, symbol in placed_orders:
+            if not order_id.startswith("sim-"):
+                try:
+                    await binance_client.cancel_order(order_id, symbol)
+                except Exception:  # noqa: BLE001
+                    logger.warning("Failed to cancel order %s after grid rebuild error", order_id)
+        await db.rollback()
+        hint = ""
+        if settings.binance_testnet:
+            hint = " Use Binance SPOT testnet API keys when BINANCE_TESTNET=true."
+        raise RuntimeError(f"Failed to place grid orders: {exc}.{hint}") from exc
 
 
 async def tick() -> None:

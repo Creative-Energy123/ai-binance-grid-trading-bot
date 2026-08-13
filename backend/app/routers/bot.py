@@ -86,13 +86,13 @@ async def put_config(
 @router.post("/bot/start", response_model=BotStatusOut)
 async def bot_start(
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> BotStatusOut:
     try:
         await grid_engine.start_bot(db)
     except RuntimeError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return await status(db, _)
+    return await status(db, user)
 
 
 @router.post("/bot/stop", response_model=BotStatusOut)
