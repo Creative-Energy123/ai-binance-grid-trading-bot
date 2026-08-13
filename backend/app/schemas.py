@@ -118,6 +118,7 @@ class HealthOut(BaseModel):
     status: str
     site_url: str
     testnet: bool
+    anthropic_configured: bool = False
 
 
 class MessageOut(BaseModel):

@@ -60,7 +60,12 @@ app.include_router(bot.router)
 
 @app.get("/api/health", response_model=HealthOut)
 async def health() -> HealthOut:
-    return HealthOut(status="ok", site_url=settings.site_url, testnet=settings.binance_testnet)
+    return HealthOut(
+        status="ok",
+        site_url=settings.site_url,
+        testnet=settings.binance_testnet,
+        anthropic_configured=bool(settings.anthropic_api_key and settings.anthropic_api_key.strip()),
+    )
 
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"

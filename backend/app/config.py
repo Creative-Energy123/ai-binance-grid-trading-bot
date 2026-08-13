@@ -30,7 +30,8 @@ class Settings(BaseSettings):
     default_symbol: str = "BTC/USDT"
 
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-sonnet-4-20250514"
+    # Prefer a current API model id; dated snapshots can 404 after retirement.
+    anthropic_model: str = "claude-sonnet-4-6"
     ai_analysis_interval_minutes: int = 30
     ai_auto_apply: bool = False
 

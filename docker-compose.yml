@@ -49,6 +49,11 @@ services:
       REDIS_URL: redis://redis:6379/0
       SITE_URL: ${SITE_URL:-http://localhost:8000}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:8000,https://trade.creativeenergy.pk}
+      # Explicitly pass AI settings (env_file alone is easy to miss after .env edits without recreate)
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-6}
+      AI_ANALYSIS_INTERVAL_MINUTES: ${AI_ANALYSIS_INTERVAL_MINUTES:-30}
+      AI_AUTO_APPLY: ${AI_AUTO_APPLY:-false}
     restart: unless-stopped
 
 volumes:
