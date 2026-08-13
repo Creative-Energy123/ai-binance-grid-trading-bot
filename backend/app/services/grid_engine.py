@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import date, datetime, timezone
 
-from ccxt.base.errors import ExchangeError
+from ccxt.base.errors import BaseError, NetworkError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -126,9 +126,31 @@ async def _rebuild_levels(db: AsyncSession, config: GridConfig) -> None:
     qty_budget = config.capital_usdt / config.grid_count
     placed_orders: list[tuple[str, str]] = []
     try:
+        # Resolve mid vs live price when possible so we only place buys below market
+        # (sells require base inventory and commonly fail on empty testnet wallets).
+        live_mid = mid
+        try:
+            live_mid = await binance_client.fetch_ticker_price(config.symbol)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not fetch live price for grid side selection: %s", exc)
+
         for i, price in enumerate(prices):
-            side = "buy" if price <= mid else "sell"
+            side = "buy" if price <= live_mid else "sell"
             qty = qty_budget / price if price else 0
+            # Defer sell placement until inventory exists; still track the level.
+            if side == "sell" and settings.binance_api_key and settings.binance_api_secret:
+                db.add(
+                    GridLevel(
+                        config_id=config.id,
+                        level_index=i,
+                        price=price,
+                        side=side,
+                        quantity=qty,
+                        order_id=None,
+                        status="pending",
+                    )
+                )
+                continue
             order = await binance_client.create_limit_order(config.symbol, side, qty, price)
             order_id = order.get("id")
             if order_id is not None:
@@ -147,7 +169,20 @@ async def _rebuild_levels(db: AsyncSession, config: GridConfig) -> None:
                 )
             )
         await db.commit()
-    except ExchangeError as exc:
+    except RuntimeError as exc:
+        logger.exception("Grid order placement failed: %s", exc)
+        for order_id, symbol in placed_orders:
+            if not order_id.startswith("sim-"):
+                try:
+                    await binance_client.cancel_order(order_id, symbol)
+                except Exception:  # noqa: BLE001
+                    logger.warning("Failed to cancel order %s after grid rebuild error", order_id)
+        await db.rollback()
+        msg = str(exc)
+        if msg.startswith("Failed to place grid orders:"):
+            raise
+        raise RuntimeError(f"Failed to place grid orders: {exc}") from exc
+    except BaseError as exc:
         logger.exception("Grid order placement failed: %s", exc)
         for order_id, symbol in placed_orders:
             if not order_id.startswith("sim-"):
@@ -157,9 +192,21 @@ async def _rebuild_levels(db: AsyncSession, config: GridConfig) -> None:
                     logger.warning("Failed to cancel order %s after grid rebuild error", order_id)
         await db.rollback()
         hint = ""
-        if settings.binance_testnet:
+        if isinstance(exc, NetworkError):
+            hint = " Exchange network/time sync issue — retry shortly."
+        elif settings.binance_testnet:
             hint = " Use Binance SPOT testnet API keys when BINANCE_TESTNET=true."
         raise RuntimeError(f"Failed to place grid orders: {exc}.{hint}") from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Unexpected grid rebuild failure: %s", exc)
+        for order_id, symbol in placed_orders:
+            if not order_id.startswith("sim-"):
+                try:
+                    await binance_client.cancel_order(order_id, symbol)
+                except Exception:  # noqa: BLE001
+                    logger.warning("Failed to cancel order %s after grid rebuild error", order_id)
+        await db.rollback()
+        raise RuntimeError(f"Failed to place grid orders: {exc}") from exc
 
 
 async def tick() -> None:

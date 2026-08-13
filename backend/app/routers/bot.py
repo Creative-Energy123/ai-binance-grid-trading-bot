@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from ccxt.base.errors import BaseError, NetworkError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -92,6 +93,12 @@ async def bot_start(
         await grid_engine.start_bot(db)
     except RuntimeError as exc:
         raise HTTPException(400, str(exc)) from exc
+    except NetworkError as exc:
+        raise HTTPException(502, f"Exchange network error: {exc}") from exc
+    except BaseError as exc:
+        raise HTTPException(400, f"Exchange error: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"Bot start failed: {exc}") from exc
     return await status(db, user)
 
 
