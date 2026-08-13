@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -23,6 +24,8 @@ class Settings(BaseSettings):
     binance_api_key: str = ""
     binance_api_secret: str = ""
     binance_testnet: bool = True
+    # Optional HTTP(S) proxy for Binance API (geo-restricted VPS regions). Falls back to HTTPS_PROXY.
+    binance_proxy: str = ""
     max_capital_usdt: float = 500.0
     default_symbol: str = "BTC/USDT"
 
@@ -42,6 +45,18 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def effective_binance_proxy(self) -> str | None:
+        """Proxy URL for ccxt Binance calls (BINANCE_PROXY, then HTTPS_PROXY / HTTP_PROXY)."""
+        for candidate in (
+            self.binance_proxy,
+            os.getenv("HTTPS_PROXY"),
+            os.getenv("HTTP_PROXY"),
+        ):
+            if candidate and candidate.strip():
+                return candidate.strip()
+        return None
 
 
 @lru_cache

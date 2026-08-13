@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import date, datetime, timezone
 
-from ccxt.base.errors import BaseError, NetworkError
+from ccxt.base.errors import BaseError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +14,7 @@ from app.models import Actor, AiAnalysis, AuditLog, BotState, GridConfig, GridLe
 from app.services.alerts import format_alert, send_alert
 from app.services.anthropic_client import analyze_market
 from app.services.backtest import build_grid_prices
-from app.services.binance_client import binance_client
+from app.services.binance_client import binance_client, binance_error_hint
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -191,12 +191,7 @@ async def _rebuild_levels(db: AsyncSession, config: GridConfig) -> None:
                 except Exception:  # noqa: BLE001
                     logger.warning("Failed to cancel order %s after grid rebuild error", order_id)
         await db.rollback()
-        hint = ""
-        if isinstance(exc, NetworkError):
-            hint = " Exchange network/time sync issue — retry shortly."
-        elif settings.binance_testnet:
-            hint = " Use Binance SPOT testnet API keys when BINANCE_TESTNET=true."
-        raise RuntimeError(f"Failed to place grid orders: {exc}.{hint}") from exc
+        raise RuntimeError(f"Failed to place grid orders: {exc}.{binance_error_hint(exc)}") from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("Unexpected grid rebuild failure: %s", exc)
         for order_id, symbol in placed_orders:
