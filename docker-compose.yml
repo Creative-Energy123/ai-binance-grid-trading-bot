@@ -1,0 +1,55 @@
+# Local development stack (Traefik is used on the VPS via GitHub Actions deploy)
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: gridbot_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gridbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gridbot}
+      POSTGRES_DB: ${POSTGRES_DB:-gridbot}
+    volumes:
+      - gridbot-pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gridbot}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: gridbot_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gridbot_app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gridbot}:${POSTGRES_PASSWORD:-gridbot}@db:5432/${POSTGRES_DB:-gridbot}
+      REDIS_URL: redis://redis:6379/0
+      SITE_URL: ${SITE_URL:-http://localhost:8000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:8000,https://trade.creativeenergy.pk}
+    restart: unless-stopped
+
+volumes:
+  gridbot-pgdata:

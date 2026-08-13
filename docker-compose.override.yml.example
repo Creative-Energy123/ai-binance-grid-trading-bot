@@ -1,0 +1,5 @@
+# Optional local overrides — copy patterns as needed; not used in VPS deploy
+# services:
+#   backend:
+#     volumes:
+#       - ./backend/app:/app/app
