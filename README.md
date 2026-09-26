@@ -112,7 +112,7 @@ upgrades to an existing deployment.
 | --- | --- |
 | [docs/STRATEGY.md](docs/STRATEGY.md) | Regime detection, the three strategies, scoring, stops and targets |
 | [docs/RISK.md](docs/RISK.md) | Every risk limit, how sizing works, what halts the bot |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production deployment, secrets, monitoring, backups |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production deployment, moving hosts, secrets, monitoring, backups |
 | [docs/GO_LIVE_CHECKLIST.md](docs/GO_LIVE_CHECKLIST.md) | The checks to complete before enabling live trading |
 
 ## API surface

@@ -41,6 +41,60 @@ docker compose logs -f backend
 
 The dashboard is served by Nginx on `HTTP_PORT` (default 8080).
 
+## Moving to a new VPS
+
+Usually done because Binance geo-blocks the current host (HTTP 451). Pick a
+region Binance serves — Tokyo is closest to their infrastructure, Singapore,
+Frankfurt and London also work. Latency matters for scalping, so prefer moving
+the host over proxying through another region.
+
+**1. Prepare the host**
+
+```bash
+curl -fsSL https://get.docker.com | sh
+docker network create web
+```
+
+**2. Start the reverse proxy** (the app deploy does not manage it)
+
+```bash
+mkdir -p ~/traefik && cd ~/traefik
+# copy deploy/traefik.yml from this repo to the host
+LETSENCRYPT_EMAIL=you@example.com docker compose -f traefik.yml up -d
+```
+
+**3. Firewall** — allow 80 and 443, plus whichever port SSH listens on.
+
+```bash
+ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 2222/tcp && ufw enable
+```
+
+**4. Point DNS** at the new IP and wait for it to resolve. Traefik cannot issue
+a certificate until the domain resolves to this host.
+
+```bash
+getent hosts your-domain.example
+```
+
+**5. Update the GitHub settings**
+
+| Setting | Where | Notes |
+| --- | --- | --- |
+| `VPS_HOST` | secret | New IP or hostname |
+| `VPS_USER` / `VPS_PASSWORD` | secret | Credentials on the new host |
+| `VPS_PORT` | variable | Only if SSH is not on 22 — e.g. `2222` |
+
+**6. Deploy** by pushing to `main`, or run the workflow manually.
+
+**7. Re-check the Binance API key IP allowlist.** If the key is restricted to
+the old server's IP it will be rejected from the new one. Update it to the new
+IP before switching out of paper mode.
+
+The new host starts with an empty database, so the admin user is recreated from
+`ADMIN_EMAIL` / `ADMIN_PASSWORD`. To carry trade history over, restore a dump
+from the old host before the first deploy; otherwise nothing needs migrating —
+API credentials are re-entered through Settings.
+
 ## TLS
 
 Terminate TLS in front of Nginx — a reverse proxy such as Caddy or Traefik, or

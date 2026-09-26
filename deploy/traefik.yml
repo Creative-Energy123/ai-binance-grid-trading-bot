@@ -1,0 +1,48 @@
+# Reverse proxy with automatic Let's Encrypt certificates.
+#
+# The application deploy does not manage Traefik — it only joins the `web`
+# network and attaches routing labels. Start this once per host:
+#
+#   cd ~/traefik
+#   LETSENCRYPT_EMAIL=you@example.com docker compose -f traefik.yml up -d
+#
+# Requires the shared network (the app deploy also creates it if missing):
+#
+#   docker network create web
+
+services:
+  traefik:
+    image: traefik:v3.1
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=web
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # Redirect plain HTTP for everything, not just this app.
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.letsencrypt.acme.email=${LETSENCRYPT_EMAIL:?set LETSENCRYPT_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+      - --log.level=INFO
+      # The dashboard stays off: it exposes routing configuration.
+      - --api.dashboard=false
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Read-only socket access: Traefik only needs to read container labels.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-letsencrypt:/letsencrypt
+    networks:
+      - web
+
+networks:
+  web:
+    external: true
+
+volumes:
+  traefik-letsencrypt:
