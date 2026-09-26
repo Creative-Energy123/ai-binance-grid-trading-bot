@@ -1,4 +1,4 @@
-name: AI Grid Trading Bot — CI/CD
+name: Adaptive Scalping Bot — CI/CD
 
 on:
   push:
@@ -14,8 +14,49 @@ env:
   IMAGE_NAME: creative-energy123/ai-binance-grid-trading-bot
 
 jobs:
+  test:
+    name: Tests and lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint backend
+        working-directory: backend
+        run: python -m ruff check app tests
+
+      - name: Run backend tests
+        working-directory: backend
+        run: python -m pytest -q
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci || npm install
+
+      - name: Typecheck frontend
+        working-directory: frontend
+        run: npm run typecheck
+
   build-and-push:
     name: Build and Push Docker Image
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -67,20 +108,56 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # A missing encryption key would deploy an app that cannot store API
+      # credentials, and a changed one would orphan the credentials already
+      # stored. Fail loudly here rather than at runtime.
+      - name: Require credential encryption key
+        env:
+          CREDENTIALS_ENCRYPTION_KEY: ${{ secrets.CREDENTIALS_ENCRYPTION_KEY }}
+        run: |
+          if [ -z "$CREDENTIALS_ENCRYPTION_KEY" ]; then
+            echo "::error::CREDENTIALS_ENCRYPTION_KEY secret is not set."
+            echo "Generate one ONCE and store it in repository secrets (and your password manager):"
+            echo '  python -c "import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())"'
+            echo "Never regenerate it for an existing deployment: stored Binance keys become unreadable."
+            exit 1
+          fi
+          python - <<'PY'
+          import base64, os, sys
+          raw = os.environ["CREDENTIALS_ENCRYPTION_KEY"].strip()
+          try:
+              key = base64.urlsafe_b64decode(raw)
+          except Exception:
+              sys.exit("::error::CREDENTIALS_ENCRYPTION_KEY is not valid urlsafe base64")
+          if len(key) != 32:
+              sys.exit(f"::error::CREDENTIALS_ENCRYPTION_KEY decodes to {len(key)} bytes, AES-256 needs 32")
+          print("Encryption key format OK")
+          PY
+
       - name: Deploy to VPS via SSH
         uses: appleboy/ssh-action@v1.0.3
         env:
           REGISTRY: ${{ env.REGISTRY }}
           APP_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          # --- repository variables (non-secret) ---
           SITE_URL: ${{ vars.SITE_URL }}
           APP_DOMAIN: ${{ vars.APP_DOMAIN }}
           CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
-          BINANCE_TESTNET: ${{ vars.BINANCE_TESTNET }}
-          MAX_CAPITAL_USDT: ${{ vars.MAX_CAPITAL_USDT }}
+          TRADING_MODE: ${{ vars.TRADING_MODE }}
+          SYMBOLS: ${{ vars.SYMBOLS }}
+          FUTURES_ENABLED: ${{ vars.FUTURES_ENABLED }}
+          FUTURES_LEVERAGE: ${{ vars.FUTURES_LEVERAGE }}
+          RISK_PER_TRADE_PCT: ${{ vars.RISK_PER_TRADE_PCT }}
+          MAX_DAILY_LOSS_PCT: ${{ vars.MAX_DAILY_LOSS_PCT }}
+          MAX_POSITIONS: ${{ vars.MAX_POSITIONS }}
+          MINIMUM_SIGNAL_SCORE: ${{ vars.MINIMUM_SIGNAL_SCORE }}
+          TAKER_FEE_PCT: ${{ vars.TAKER_FEE_PCT }}
+          SLIPPAGE_PCT: ${{ vars.SLIPPAGE_PCT }}
           POSTGRES_USER: ${{ vars.POSTGRES_USER }}
           POSTGRES_DB: ${{ vars.POSTGRES_DB }}
-          AI_ANALYSIS_INTERVAL_MINUTES: ${{ vars.AI_ANALYSIS_INTERVAL_MINUTES }}
-          AI_AUTO_APPLY: ${{ vars.AI_AUTO_APPLY }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+          # --- secrets ---
+          CREDENTIALS_ENCRYPTION_KEY: ${{ secrets.CREDENTIALS_ENCRYPTION_KEY }}
           ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
@@ -100,7 +177,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASSWORD }}
           port: 22
-          envs: REGISTRY,APP_IMAGE,SITE_URL,APP_DOMAIN,CORS_ORIGINS,BINANCE_TESTNET,MAX_CAPITAL_USDT,POSTGRES_USER,POSTGRES_DB,AI_ANALYSIS_INTERVAL_MINUTES,AI_AUTO_APPLY,ADMIN_EMAIL,ADMIN_PASSWORD,JWT_SECRET,BINANCE_API_KEY,BINANCE_API_SECRET,BINANCE_PROXY,HTTPS_PROXY,ANTHROPIC_API_KEY,POSTGRES_PASSWORD,TELEGRAM_BOT_TOKEN,TELEGRAM_CHAT_ID,ALERT_WEBHOOK_URL,VPS_PASSWORD,GH_TOKEN
+          envs: REGISTRY,APP_IMAGE,SITE_URL,APP_DOMAIN,CORS_ORIGINS,TRADING_MODE,SYMBOLS,FUTURES_ENABLED,FUTURES_LEVERAGE,RISK_PER_TRADE_PCT,MAX_DAILY_LOSS_PCT,MAX_POSITIONS,MINIMUM_SIGNAL_SCORE,TAKER_FEE_PCT,SLIPPAGE_PCT,POSTGRES_USER,POSTGRES_DB,ANTHROPIC_MODEL,CREDENTIALS_ENCRYPTION_KEY,ADMIN_EMAIL,ADMIN_PASSWORD,JWT_SECRET,BINANCE_API_KEY,BINANCE_API_SECRET,BINANCE_PROXY,HTTPS_PROXY,ANTHROPIC_API_KEY,POSTGRES_PASSWORD,TELEGRAM_BOT_TOKEN,TELEGRAM_CHAT_ID,ALERT_WEBHOOK_URL,VPS_PASSWORD,GH_TOKEN
           script: |
             set -e
 
@@ -109,29 +186,33 @@ jobs:
             cd "$APP_DIR"
 
             echo "$VPS_PASSWORD" | sudo -S docker login "$REGISTRY" -u "${{ github.actor }}" -p "$GH_TOKEN"
-
             echo "$VPS_PASSWORD" | sudo -S docker pull "$APP_IMAGE"
-
             echo "$VPS_PASSWORD" | sudo -S docker network create web 2>/dev/null || true
 
-            # Defaults when repository variables are unset
+            # Defaults when repository variables are unset. TRADING_MODE stays on
+            # paper: promoting to testnet or live is a deliberate act, not a default.
             : "${SITE_URL:=https://trade.creativeenergy.pk}"
             : "${APP_DOMAIN:=trade.creativeenergy.pk}"
             : "${CORS_ORIGINS:=https://trade.creativeenergy.pk}"
-            : "${BINANCE_TESTNET:=true}"
-            : "${MAX_CAPITAL_USDT:=500}"
+            : "${TRADING_MODE:=paper}"
+            : "${SYMBOLS:=BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT}"
+            : "${FUTURES_ENABLED:=false}"
+            : "${FUTURES_LEVERAGE:=3}"
+            : "${RISK_PER_TRADE_PCT:=0.35}"
+            : "${MAX_DAILY_LOSS_PCT:=2}"
+            : "${MAX_POSITIONS:=2}"
+            : "${MINIMUM_SIGNAL_SCORE:=75}"
+            : "${TAKER_FEE_PCT:=0.04}"
+            : "${SLIPPAGE_PCT:=0.02}"
             : "${POSTGRES_USER:=gridbot}"
             : "${POSTGRES_DB:=gridbot}"
-            : "${AI_ANALYSIS_INTERVAL_MINUTES:=30}"
-            : "${AI_AUTO_APPLY:=false}"
+            : "${ANTHROPIC_MODEL:=claude-sonnet-5}"
 
             cat > docker-compose.yml <<COMPOSE
-            version: "3.8"
-
             services:
               db:
                 image: postgres:16-alpine
-                container_name: gridbot_db
+                container_name: scalper_db
                 restart: unless-stopped
                 environment:
                   POSTGRES_USER: "$POSTGRES_USER"
@@ -149,7 +230,7 @@ jobs:
 
               redis:
                 image: redis:7-alpine
-                container_name: gridbot_redis
+                container_name: scalper_redis
                 restart: unless-stopped
                 networks:
                   - web
@@ -159,9 +240,9 @@ jobs:
                   timeout: 3s
                   retries: 5
 
-              gridbot:
+              scalper:
                 image: $APP_IMAGE
-                container_name: gridbot_app
+                container_name: scalper_app
                 restart: unless-stopped
                 depends_on:
                   db:
@@ -175,18 +256,26 @@ jobs:
                   CORS_ORIGINS: "$CORS_ORIGINS"
                   DATABASE_URL: "postgresql+asyncpg://$POSTGRES_USER:$POSTGRES_PASSWORD@db:5432/$POSTGRES_DB"
                   REDIS_URL: redis://redis:6379/0
+                  CREDENTIALS_ENCRYPTION_KEY: "$CREDENTIALS_ENCRYPTION_KEY"
                   ADMIN_EMAIL: "$ADMIN_EMAIL"
                   ADMIN_PASSWORD: "$ADMIN_PASSWORD"
                   JWT_SECRET: "$JWT_SECRET"
+                  TRADING_MODE: "$TRADING_MODE"
+                  SYMBOLS: "$SYMBOLS"
+                  FUTURES_ENABLED: "$FUTURES_ENABLED"
+                  FUTURES_LEVERAGE: "$FUTURES_LEVERAGE"
+                  RISK_PER_TRADE_PCT: "$RISK_PER_TRADE_PCT"
+                  MAX_DAILY_LOSS_PCT: "$MAX_DAILY_LOSS_PCT"
+                  MAX_POSITIONS: "$MAX_POSITIONS"
+                  MINIMUM_SIGNAL_SCORE: "$MINIMUM_SIGNAL_SCORE"
+                  TAKER_FEE_PCT: "$TAKER_FEE_PCT"
+                  SLIPPAGE_PCT: "$SLIPPAGE_PCT"
                   BINANCE_API_KEY: "$BINANCE_API_KEY"
                   BINANCE_API_SECRET: "$BINANCE_API_SECRET"
-                  BINANCE_TESTNET: "$BINANCE_TESTNET"
                   BINANCE_PROXY: "$BINANCE_PROXY"
                   HTTPS_PROXY: "$HTTPS_PROXY"
-                  MAX_CAPITAL_USDT: "$MAX_CAPITAL_USDT"
                   ANTHROPIC_API_KEY: "$ANTHROPIC_API_KEY"
-                  AI_ANALYSIS_INTERVAL_MINUTES: "$AI_ANALYSIS_INTERVAL_MINUTES"
-                  AI_AUTO_APPLY: "$AI_AUTO_APPLY"
+                  ANTHROPIC_MODEL: "$ANTHROPIC_MODEL"
                   TELEGRAM_BOT_TOKEN: "$TELEGRAM_BOT_TOKEN"
                   TELEGRAM_CHAT_ID: "$TELEGRAM_CHAT_ID"
                   ALERT_WEBHOOK_URL: "$ALERT_WEBHOOK_URL"
@@ -195,18 +284,18 @@ jobs:
                 labels:
                   - traefik.enable=true
                   - traefik.docker.network=web
-                  - traefik.http.routers.gridbot.rule=Host(\`$APP_DOMAIN\`) || Host(\`www.$APP_DOMAIN\`)
-                  - traefik.http.routers.gridbot.entrypoints=websecure
-                  - traefik.http.routers.gridbot.tls.certresolver=letsencrypt
-                  - traefik.http.services.gridbot.loadbalancer.server.port=8000
-                  - traefik.http.routers.gridbot-http.rule=Host(\`$APP_DOMAIN\`) || Host(\`www.$APP_DOMAIN\`)
-                  - traefik.http.routers.gridbot-http.entrypoints=web
-                  - traefik.http.routers.gridbot-http.middlewares=gridbot-https-redirect
-                  - traefik.http.middlewares.gridbot-https-redirect.redirectscheme.scheme=https
-                  - traefik.http.middlewares.gridbot-https-redirect.redirectscheme.permanent=true
-                  - traefik.http.middlewares.gridbot-headers.headers.stsSeconds=31536000
-                  - traefik.http.middlewares.gridbot-headers.headers.stsIncludeSubdomains=true
-                  - traefik.http.routers.gridbot.middlewares=gridbot-headers
+                  - traefik.http.routers.scalper.rule=Host(\`$APP_DOMAIN\`) || Host(\`www.$APP_DOMAIN\`)
+                  - traefik.http.routers.scalper.entrypoints=websecure
+                  - traefik.http.routers.scalper.tls.certresolver=letsencrypt
+                  - traefik.http.services.scalper.loadbalancer.server.port=8000
+                  - traefik.http.routers.scalper-http.rule=Host(\`$APP_DOMAIN\`) || Host(\`www.$APP_DOMAIN\`)
+                  - traefik.http.routers.scalper-http.entrypoints=web
+                  - traefik.http.routers.scalper-http.middlewares=scalper-https-redirect
+                  - traefik.http.middlewares.scalper-https-redirect.redirectscheme.scheme=https
+                  - traefik.http.middlewares.scalper-https-redirect.redirectscheme.permanent=true
+                  - traefik.http.middlewares.scalper-headers.headers.stsSeconds=31536000
+                  - traefik.http.middlewares.scalper-headers.headers.stsIncludeSubdomains=true
+                  - traefik.http.routers.scalper.middlewares=scalper-headers
 
             networks:
               web:
@@ -217,38 +306,39 @@ jobs:
             COMPOSE
 
             echo "=== Generated docker-compose.yml ==="
-            # Redact secrets from log preview
-            sed -E 's/(PASSWORD|SECRET|API_KEY|API_SECRET|TOKEN|WEBHOOK_URL): "[^"]*"/\1: "***"/g' docker-compose.yml || cat docker-compose.yml
+            sed -E 's/(PASSWORD|SECRET|API_KEY|API_SECRET|TOKEN|WEBHOOK_URL|ENCRYPTION_KEY): "[^"]*"/\1: "***"/g' docker-compose.yml || true
 
             echo "$VPS_PASSWORD" | sudo -S docker compose down || true
-            echo "$VPS_PASSWORD" | sudo -S docker rm -f gridbot_app 2>/dev/null || true
+            # Containers from the previous grid-bot deployment
+            echo "$VPS_PASSWORD" | sudo -S docker rm -f gridbot_app gridbot_db gridbot_redis 2>/dev/null || true
 
             echo "$VPS_PASSWORD" | sudo -S docker compose up -d
 
-            sleep 20
+            echo "=== Database migrations ==="
+            echo "$VPS_PASSWORD" | sudo -S docker compose exec -T scalper python -m alembic upgrade head || \
+              echo "Alembic run failed; the app creates missing tables at boot, but check this."
+
+            sleep 15
 
             echo "=== Container Status ==="
             echo "$VPS_PASSWORD" | sudo -S docker compose ps
-            echo "$VPS_PASSWORD" | sudo -S docker ps -a --filter "name=gridbot" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
 
             echo "=== App Logs ==="
-            echo "$VPS_PASSWORD" | sudo -S docker compose logs --tail 50 gridbot
+            echo "$VPS_PASSWORD" | sudo -S docker compose logs --tail 50 scalper
 
             echo "=== Health check (internal) ==="
-            echo "$VPS_PASSWORD" | sudo -S docker exec gridbot_app curl -fsS http://127.0.0.1:8000/api/health || echo "Health check failed"
+            echo "$VPS_PASSWORD" | sudo -S docker exec scalper_app curl -fsS http://127.0.0.1:8000/api/health || echo "Health check failed"
 
             echo "=== DNS check ==="
             if getent hosts "$APP_DOMAIN" >/dev/null 2>&1; then
               echo "OK: $APP_DOMAIN resolves"
-              getent hosts "$APP_DOMAIN"
             else
-              echo "ERROR: $APP_DOMAIN does NOT resolve in DNS."
-              echo "Add an A record for trade.creativeenergy.pk pointing at this VPS IP."
+              echo "ERROR: $APP_DOMAIN does NOT resolve. Add an A record pointing at this VPS."
             fi
 
             echo "$VPS_PASSWORD" | sudo -S docker image prune -f || true
 
-            echo "Deployment completed."
+            echo "Deployment completed in $TRADING_MODE mode. The bot starts STOPPED and must be started from the dashboard."
             echo "Site: $SITE_URL"
 
       - name: Verify Deployment
@@ -265,8 +355,6 @@ jobs:
             cd ~/ai-binance-grid-trading-bot
             echo "$VPS_PASSWORD" | sudo -S docker compose ps
             echo "=== App Logs ==="
-            echo "$VPS_PASSWORD" | sudo -S docker compose logs --tail 30 gridbot
-            echo "$VPS_PASSWORD" | sudo -S docker exec gridbot_app curl -fsS http://127.0.0.1:8000/api/health || true
-            echo ""
-            echo "Application URL:"
-            echo "  Site: https://trade.creativeenergy.pk"
+            echo "$VPS_PASSWORD" | sudo -S docker compose logs --tail 30 scalper
+            echo "=== Health ==="
+            echo "$VPS_PASSWORD" | sudo -S docker exec scalper_app curl -fsS http://127.0.0.1:8000/api/health || true
