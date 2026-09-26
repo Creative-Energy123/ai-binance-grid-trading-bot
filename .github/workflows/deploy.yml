@@ -430,6 +430,21 @@ jobs:
               sleep 2
             done
 
+            echo "=== Reconciling the database role password ==="
+            # A Postgres volume keeps the password it was initialised with, so a
+            # rotated (or previously corrupted) secret leaves the app unable to
+            # authenticate even though everything else is correct. Connections over
+            # the container's local socket are trusted, so the role password can be
+            # set to the configured value without destroying any data.
+            PW_SQL=$(clean "$POSTGRES_PASSWORD" | sed "s/'/''/g")
+            if echo "$VPS_PASSWORD" | sudo -S docker compose exec -T db psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -q -c "ALTER USER \"$DB_USER\" WITH PASSWORD '$PW_SQL';"; then
+              echo "Role $DB_USER now matches the configured secret."
+              echo "$VPS_PASSWORD" | sudo -S docker compose restart scalper >/dev/null 2>&1 || true
+              sleep 8
+            else
+              echo "WARNING: could not reconcile the role password; the app may fail to authenticate."
+            fi
+
             echo "=== Legacy schema check ==="
             LEGACY=$(echo "$VPS_PASSWORD" | sudo -S docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "select count(*) from information_schema.tables where table_name in ('grid_configs','grid_levels','bot_state')" 2>/dev/null | tr -d '[:space:]')
             if [ "${LEGACY:-0}" != "0" ]; then
