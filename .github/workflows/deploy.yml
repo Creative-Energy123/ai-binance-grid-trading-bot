@@ -20,6 +20,10 @@ on:
         description: Remove the cached image on the VPS and pull it again
         type: boolean
         default: true
+      ssh_debug:
+        description: Verbose SSH output, for diagnosing connection failures
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -205,6 +209,8 @@ jobs:
           # Key auth is used when VPS_SSH_KEY is set; otherwise the password is.
           key: ${{ secrets.VPS_SSH_KEY }}
           password: ${{ secrets.VPS_PASSWORD }}
+          debug: ${{ inputs.ssh_debug == true }}
+          command_timeout: 20m
           port: ${{ vars.VPS_PORT || secrets.VPS_PORT || 22 }}
           envs: REGISTRY,APP_IMAGE,RESET_DATABASE,REBUILD_IMAGE,SITE_URL,APP_DOMAIN,CORS_ORIGINS,TRADING_MODE,SYMBOLS,FUTURES_ENABLED,FUTURES_LEVERAGE,RISK_PER_TRADE_PCT,MAX_DAILY_LOSS_PCT,MAX_POSITIONS,MINIMUM_SIGNAL_SCORE,TAKER_FEE_PCT,SLIPPAGE_PCT,POSTGRES_USER,POSTGRES_DB,ANTHROPIC_MODEL,CREDENTIALS_ENCRYPTION_KEY,ADMIN_EMAIL,ADMIN_PASSWORD,JWT_SECRET,BINANCE_API_KEY,BINANCE_API_SECRET,BINANCE_PROXY,HTTPS_PROXY,ANTHROPIC_API_KEY,POSTGRES_PASSWORD,POSTGRES_PASSWORD_ENC,TELEGRAM_BOT_TOKEN,TELEGRAM_CHAT_ID,ALERT_WEBHOOK_URL,VPS_PASSWORD,GH_TOKEN
           script: |
