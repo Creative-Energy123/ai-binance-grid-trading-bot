@@ -76,11 +76,12 @@ async def take_snapshot(db: AsyncSession, bot: BotInstance, prices: dict[str, fl
     positions = await open_positions(db)
     total_unrealized = sum(unrealized(p, prices.get(p.symbol, p.entry_price)) for p in positions)
     exposure = sum(p.remaining_quantity * p.entry_price for p in positions)
+    margin_used = sum(p.remaining_quantity * p.entry_price / max(p.leverage, 1) for p in positions)
     snapshot = PortfolioSnapshot(
         mode=bot.mode,
         equity=bot.equity + total_unrealized,
         balance=bot.equity,
-        available=max(bot.equity - sum(p.remaining_quantity * p.entry_price / max(p.leverage, 1) for p in positions), 0.0),
+        available=max(bot.equity - margin_used, 0.0),
         unrealized_pnl=total_unrealized,
         open_positions=len(positions),
         exposure=exposure,

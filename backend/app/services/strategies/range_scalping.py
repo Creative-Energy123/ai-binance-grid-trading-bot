@@ -9,10 +9,10 @@ because `regime.allow_range_strategy` is false outside ranging conditions.
 from __future__ import annotations
 
 from app.config import Settings
+from app.services.contracts import MarketContext, ScoreBreakdown, Side, StrategyCandidate
 from app.services.indicators import IndicatorSnapshot
 from app.services.regime import ADX_TREND
 from app.services.strategies.base import Strategy, clamp, scaled
-from app.services.contracts import MarketContext, ScoreBreakdown, Side, StrategyCandidate
 
 EDGE_FRACTION = 0.25  # entries must sit in the outer quarter of the range
 MIN_TOUCHES = 2
@@ -51,7 +51,8 @@ class RangeScalpingStrategy(Strategy):
 
         # The range has to be wide enough that one leg pays for the round trip.
         band_pct = 100 * band / setup.close
-        if band_pct < settings.round_trip_cost_pct * 3:
+        min_band_pct = settings.round_trip_cost_pct * 3
+        if band_pct < min_band_pct:
             return None
 
         price = setup.close
@@ -75,7 +76,8 @@ class RangeScalpingStrategy(Strategy):
             return None  # level is not validated yet
         reasons = [
             f"Range {support:.6g}–{resistance:.6g} ({band_pct:.2f}% wide)",
-            f"Price in the outer {int(EDGE_FRACTION * 100)}% near {'support' if side is Side.LONG else 'resistance'}",
+            f"Price in the outer {int(EDGE_FRACTION * 100)}% near "
+            f"{'support' if side is Side.LONG else 'resistance'}",
             f"Level tested {touches} times",
         ]
 
@@ -97,8 +99,11 @@ class RangeScalpingStrategy(Strategy):
 
         ratio = entry.volume_ratio or 0.0
         scores.volume = clamp(scaled(ratio, 0.5, 1.4))
-        scores.volatility = clamp(scaled(band_pct, settings.round_trip_cost_pct * 3, settings.round_trip_cost_pct * 12))
-        scores.structure = clamp(0.5 * scaled(touches, MIN_TOUCHES, 5) + 0.5 * scaled(abs(price - target) / band, 0.5, 1.0))
+        scores.volatility = clamp(scaled(band_pct, min_band_pct, settings.round_trip_cost_pct * 12))
+        distance_to_target = abs(price - target) / band
+        scores.structure = clamp(
+            0.5 * scaled(touches, MIN_TOUCHES, 5) + 0.5 * scaled(distance_to_target, 0.5, 1.0)
+        )
         edge_distance = position_in_range if side is Side.LONG else 1 - position_in_range
         scores.entry = clamp(scaled(edge_distance, EDGE_FRACTION, 0.0))
 

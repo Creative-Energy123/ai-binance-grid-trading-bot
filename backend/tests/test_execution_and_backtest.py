@@ -6,10 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.config import get_settings
 from app.db import Base
-from app.models import BotInstance, Position, PositionStatus, Trade
+from app.models import BotInstance, PositionStatus, Trade
 from app.services.backtest import aggregate, run_backtest
 from app.services.contracts import ScoreBreakdown, Side, SizedOrder, TradeSignal
-from app.services.execution import apply_slippage, execution_engine, fee_for
+from app.services.execution import ExecutionError, apply_slippage, execution_engine, fee_for
 from app.services.risk import register_trade_result
 from tests.conftest import synth_candles
 
@@ -88,7 +88,7 @@ async def test_paper_entry_records_a_position_with_fees(db, bot):
 async def test_a_second_position_on_the_same_symbol_is_refused(db, bot):
     get_settings().trading_mode = "paper"
     await execution_engine.open_position(db, bot, sized(), signal())
-    with pytest.raises(Exception):
+    with pytest.raises(ExecutionError, match="already open"):
         await execution_engine.open_position(db, bot, sized(), signal())
 
 

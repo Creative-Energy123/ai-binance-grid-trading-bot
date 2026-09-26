@@ -129,6 +129,17 @@ upgrades to an existing deployment.
 
 Interactive docs are at `/docs` when the backend runs.
 
+## Known gaps
+
+- Market data is polled over REST on the engine interval, not streamed over
+  Binance WebSockets. The staleness check and health component exist and work,
+  but a WebSocket feed would cut latency and API weight.
+- Redis is provisioned in the compose stack but is not yet used by the backend;
+  scheduling is handled in-process by APScheduler rather than Celery.
+- Parameter optimisation is manual: the backtester provides the train /
+  validation / out-of-sample split and the overfitting warning, but there is no
+  automated search.
+
 ## Security
 
 - Exchange credentials are encrypted at rest with AES-256-GCM and are never

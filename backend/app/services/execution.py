@@ -298,7 +298,8 @@ class ExecutionEngine:
 
         direction = 1 if side is Side.LONG else -1
         gross = (fill.price - position.entry_price) * fill.quantity * direction
-        entry_fee_share = position.fees_paid * (fill.quantity / position.quantity) if position.quantity else 0.0
+        fill_share = (fill.quantity / position.quantity) if position.quantity else 0.0
+        entry_fee_share = position.fees_paid * fill_share
         fees = fill.fee + entry_fee_share
         pnl = gross - fees
 

@@ -121,13 +121,15 @@ def evaluate_limits(
     check(
         "consecutive_losses",
         state.consecutive_losses < settings.max_consecutive_losses,
-        f"{state.consecutive_losses} consecutive losses reached the limit of {settings.max_consecutive_losses}",
+        f"{state.consecutive_losses} consecutive losses reached the limit of "
+        f"{settings.max_consecutive_losses}",
     )
 
     check(
         "trade_rate",
         state.trades_last_hour < settings.max_trades_per_hour,
-        f"{state.trades_last_hour} trades in the last hour reached the cap of {settings.max_trades_per_hour}",
+        f"{state.trades_last_hour} trades in the last hour reached the cap of "
+        f"{settings.max_trades_per_hour}",
     )
 
     cooldown_until = state.cooldown_until

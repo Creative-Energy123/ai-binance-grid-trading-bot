@@ -13,10 +13,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from app.config import get_settings
+from app.services.contracts import MarketContext
 from app.services.exchange import exchange
 from app.services.indicators import Candle, compute_snapshot
 from app.services.regime import detect_regime
-from app.services.contracts import MarketContext
 
 logger = logging.getLogger(__name__)
 

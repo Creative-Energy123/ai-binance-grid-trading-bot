@@ -83,7 +83,7 @@ def rsi(values: list[float], period: int = 14) -> list[float | None]:
     avg_gain = rma(gains, period)
     avg_loss = rma(losses, period)
     out: list[float | None] = [None]
-    for g, loss in zip(avg_gain, avg_loss):
+    for g, loss in zip(avg_gain, avg_loss, strict=True):
         if g is None or loss is None:
             out.append(None)
         elif loss == 0:
@@ -100,7 +100,7 @@ def macd(
     slow_line = ema(values, slow)
     macd_line: list[float | None] = [
         (f - s) if (f is not None and s is not None) else None
-        for f, s in zip(fast_line, slow_line)
+        for f, s in zip(fast_line, slow_line, strict=True)
     ]
     defined = [v for v in macd_line if v is not None]
     signal_vals = ema(defined, signal)
@@ -110,7 +110,7 @@ def macd(
         signal_line[offset + i] = v
     hist: list[float | None] = [
         (m - s) if (m is not None and s is not None) else None
-        for m, s in zip(macd_line, signal_line)
+        for m, s in zip(macd_line, signal_line, strict=True)
     ]
     return macd_line, signal_line, hist
 

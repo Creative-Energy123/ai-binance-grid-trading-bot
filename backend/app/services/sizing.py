@@ -9,7 +9,7 @@ for futures it is rejected when the liquidation price would sit too close.
 from __future__ import annotations
 
 from app.config import Settings, get_settings
-from app.services.contracts import SizedOrder, Side, TradeSignal
+from app.services.contracts import Side, SizedOrder, TradeSignal
 
 
 class SizingError(RuntimeError):

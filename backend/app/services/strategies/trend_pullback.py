@@ -8,9 +8,9 @@ the trend direction. Shorts are only produced for futures; spot never shorts.
 from __future__ import annotations
 
 from app.config import Settings
+from app.services.contracts import MarketContext, ScoreBreakdown, Side, StrategyCandidate
 from app.services.regime import BEARISH, BULLISH
 from app.services.strategies.base import Strategy, clamp, scaled
-from app.services.contracts import MarketContext, ScoreBreakdown, Side, StrategyCandidate
 
 
 class TrendPullbackStrategy(Strategy):
@@ -101,7 +101,8 @@ class TrendPullbackStrategy(Strategy):
         scores.structure = clamp(0.5 * float(near_vwap) + 0.5 * scaled(2.0 - stop_gap_pct, -1.0, 1.5))
 
         # --- entry timing quality ---
-        aligned = (entry.ema9 or 0) > (entry.ema21 or 0) if side is Side.LONG else (entry.ema9 or 0) < (entry.ema21 or 0)
+        fast, slow = entry.ema9 or 0, entry.ema21 or 0
+        aligned = fast > slow if side is Side.LONG else fast < slow
         scores.entry = clamp(0.6 * float(aligned) + 0.4 * scaled(distance_atr, 2.0, 0.2))
 
         return StrategyCandidate(

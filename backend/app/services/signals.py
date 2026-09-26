@@ -11,7 +11,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.config import Settings, get_settings
-from app.services.strategies import ALL_STRATEGIES
 from app.services.contracts import (
     MarketContext,
     ScoreBreakdown,
@@ -19,6 +18,7 @@ from app.services.contracts import (
     StrategyCandidate,
     TradeSignal,
 )
+from app.services.strategies import ALL_STRATEGIES
 
 MIN_REWARD_RISK = 1.2
 

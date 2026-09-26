@@ -23,8 +23,6 @@ from app.models import (
     BotInstance,
     Order,
     OrderStatus,
-    Position,
-    PositionStatus,
     RiskEvent,
     Signal,
     SystemLog,

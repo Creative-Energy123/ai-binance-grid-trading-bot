@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import audit, get_current_user, require_admin, require_trader
 from app.config import TRADING_MODES, get_settings
 from app.db import get_db
-from app.models import BotInstance, Position, PositionStatus, User
+from app.models import BotInstance, User
 from app.schemas import (
     BotStatusOut,
     EmergencyStopIn,

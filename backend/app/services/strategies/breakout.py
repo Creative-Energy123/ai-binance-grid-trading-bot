@@ -8,9 +8,9 @@ travelled most of the move.
 from __future__ import annotations
 
 from app.config import Settings
+from app.services.contracts import MarketContext, ScoreBreakdown, Side, StrategyCandidate
 from app.services.indicators import IndicatorSnapshot
 from app.services.strategies.base import Strategy, clamp, scaled
-from app.services.contracts import MarketContext, ScoreBreakdown, Side, StrategyCandidate
 
 MAX_EXTENSION_ATR = 1.2  # how far past the level we will still enter
 

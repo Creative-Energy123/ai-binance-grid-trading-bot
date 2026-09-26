@@ -172,7 +172,9 @@ def _metrics(result: BacktestResult, settings: Settings) -> dict:
         "net_pnl_pct": round(100 * net / result.starting_equity, 4) if result.starting_equity else 0,
         "gross_profit": round(gross_profit, 4),
         "gross_loss": round(gross_loss, 4),
-        "profit_factor": round(gross_profit / gross_loss, 3) if gross_loss else (999.0 if gross_profit else 0.0),
+        "profit_factor": (
+            round(gross_profit / gross_loss, 3) if gross_loss else (999.0 if gross_profit else 0.0)
+        ),
         "max_drawdown_pct": round(max_dd, 3),
         "sharpe": round(sharpe, 3),
         "average_trade": round(net / len(trades), 4),
