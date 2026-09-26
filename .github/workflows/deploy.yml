@@ -8,6 +8,18 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      reset_database:
+        description: >-
+          DESTRUCTIVE: dump, then delete the Postgres volume and start from an
+          empty database. Needed once when migrating off the grid bot, whose
+          trades/ai_analyses/audit_logs tables collide with the new schema.
+        type: boolean
+        default: false
+      rebuild_image:
+        description: Remove the cached image on the VPS and pull it again
+        type: boolean
+        default: true
 
 env:
   REGISTRY: ghcr.io
@@ -102,7 +114,7 @@ jobs:
     name: Deploy to VPS
     needs: build-and-push
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
 
     steps:
       - name: Checkout code
@@ -139,6 +151,8 @@ jobs:
         env:
           REGISTRY: ${{ env.REGISTRY }}
           APP_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          RESET_DATABASE: ${{ inputs.reset_database }}
+          REBUILD_IMAGE: ${{ inputs.rebuild_image }}
           # --- repository variables (non-secret) ---
           SITE_URL: ${{ vars.SITE_URL }}
           APP_DOMAIN: ${{ vars.APP_DOMAIN }}
@@ -177,7 +191,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASSWORD }}
           port: 22
-          envs: REGISTRY,APP_IMAGE,SITE_URL,APP_DOMAIN,CORS_ORIGINS,TRADING_MODE,SYMBOLS,FUTURES_ENABLED,FUTURES_LEVERAGE,RISK_PER_TRADE_PCT,MAX_DAILY_LOSS_PCT,MAX_POSITIONS,MINIMUM_SIGNAL_SCORE,TAKER_FEE_PCT,SLIPPAGE_PCT,POSTGRES_USER,POSTGRES_DB,ANTHROPIC_MODEL,CREDENTIALS_ENCRYPTION_KEY,ADMIN_EMAIL,ADMIN_PASSWORD,JWT_SECRET,BINANCE_API_KEY,BINANCE_API_SECRET,BINANCE_PROXY,HTTPS_PROXY,ANTHROPIC_API_KEY,POSTGRES_PASSWORD,TELEGRAM_BOT_TOKEN,TELEGRAM_CHAT_ID,ALERT_WEBHOOK_URL,VPS_PASSWORD,GH_TOKEN
+          envs: REGISTRY,APP_IMAGE,RESET_DATABASE,REBUILD_IMAGE,SITE_URL,APP_DOMAIN,CORS_ORIGINS,TRADING_MODE,SYMBOLS,FUTURES_ENABLED,FUTURES_LEVERAGE,RISK_PER_TRADE_PCT,MAX_DAILY_LOSS_PCT,MAX_POSITIONS,MINIMUM_SIGNAL_SCORE,TAKER_FEE_PCT,SLIPPAGE_PCT,POSTGRES_USER,POSTGRES_DB,ANTHROPIC_MODEL,CREDENTIALS_ENCRYPTION_KEY,ADMIN_EMAIL,ADMIN_PASSWORD,JWT_SECRET,BINANCE_API_KEY,BINANCE_API_SECRET,BINANCE_PROXY,HTTPS_PROXY,ANTHROPIC_API_KEY,POSTGRES_PASSWORD,TELEGRAM_BOT_TOKEN,TELEGRAM_CHAT_ID,ALERT_WEBHOOK_URL,VPS_PASSWORD,GH_TOKEN
           script: |
             set -e
 
@@ -186,7 +200,27 @@ jobs:
             cd "$APP_DIR"
 
             echo "$VPS_PASSWORD" | sudo -S docker login "$REGISTRY" -u "${{ github.actor }}" -p "$GH_TOKEN"
+
+            # Stop the old stack before touching images or volumes.
+            echo "$VPS_PASSWORD" | sudo -S docker compose down || true
+            echo "$VPS_PASSWORD" | sudo -S docker rm -f gridbot_app gridbot_db gridbot_redis 2>/dev/null || true
+
+            if [ "$REBUILD_IMAGE" = "true" ]; then
+              echo "=== Dropping the cached image so the new one is definitely pulled ==="
+              echo "$VPS_PASSWORD" | sudo -S docker rmi -f "$APP_IMAGE" 2>/dev/null || true
+            fi
             echo "$VPS_PASSWORD" | sudo -S docker pull "$APP_IMAGE"
+            echo "$VPS_PASSWORD" | sudo -S docker image inspect "$APP_IMAGE" --format 'Deploying image {{.Id}} built {{.Created}}'
+
+            if [ "$RESET_DATABASE" = "true" ]; then
+              echo "=== RESET: backing up, then deleting the Postgres volume ==="
+              STAMP=$(date +%Y%m%d-%H%M%S)
+              # Best effort: the old stack is already down, so bring Postgres up alone to dump it.
+              echo "$VPS_PASSWORD" | sudo -S docker run --rm -v gridbot-pgdata:/var/lib/postgresql/data -v "$PWD":/backup alpine tar czf "/backup/pgdata-backup-$STAMP.tar.gz" -C /var/lib/postgresql data && echo "Volume archived to $PWD/pgdata-backup-$STAMP.tar.gz" || echo "WARNING: could not archive the volume (it may not exist yet)"
+
+              echo "$VPS_PASSWORD" | sudo -S docker volume rm gridbot-pgdata 2>/dev/null && echo "Volume gridbot-pgdata deleted." || echo "Volume gridbot-pgdata not present."
+            fi
+
             echo "$VPS_PASSWORD" | sudo -S docker network create web 2>/dev/null || true
 
             # Defaults when repository variables are unset. TRADING_MODE stays on
@@ -308,11 +342,7 @@ jobs:
             echo "=== Generated docker-compose.yml ==="
             sed -E 's/(PASSWORD|SECRET|API_KEY|API_SECRET|TOKEN|WEBHOOK_URL|ENCRYPTION_KEY): "[^"]*"/\1: "***"/g' docker-compose.yml || true
 
-            echo "$VPS_PASSWORD" | sudo -S docker compose down || true
-            # Containers from the previous grid-bot deployment
-            echo "$VPS_PASSWORD" | sudo -S docker rm -f gridbot_app gridbot_db gridbot_redis 2>/dev/null || true
-
-            echo "$VPS_PASSWORD" | sudo -S docker compose up -d
+            echo "$VPS_PASSWORD" | sudo -S docker compose up -d --force-recreate
 
             echo "=== Database migrations ==="
             if echo "$VPS_PASSWORD" | sudo -S docker compose exec -T scalper python -m alembic upgrade head; then
