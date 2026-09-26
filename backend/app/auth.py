@@ -22,6 +22,14 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 ROLE_ORDER = {Role.VIEWER.value: 0, Role.TRADER.value: 1, Role.ADMIN.value: 2}
 
 
+def as_utc(value: datetime | None) -> datetime | None:
+    """Timestamps read back from the database can be naive (SQLite, and any
+    column stored without a timezone); compare them as UTC."""
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
@@ -64,7 +72,8 @@ async def consume_refresh_token(db: AsyncSession, raw: str) -> User:
         await db.execute(select(RefreshToken).where(RefreshToken.token_hash == _hash_token(raw)))
     ).scalar_one_or_none()
     now = datetime.now(timezone.utc)
-    if row is None or row.revoked or row.expires_at <= now:
+    expires_at = as_utc(row.expires_at) if row else None
+    if row is None or row.revoked or (expires_at and expires_at <= now):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
     row.revoked = True  # rotate on every use
     user = (await db.execute(select(User).where(User.id == row.user_id))).scalar_one_or_none()

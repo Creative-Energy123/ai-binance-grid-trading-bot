@@ -1,4 +1,4 @@
-# AI Binance Grid Trading Bot — production image
+# Binance Adaptive Scalping Bot — production image
 # Frontend build + FastAPI backend serving static UI
 
 FROM node:22-alpine AS frontend
@@ -8,14 +8,14 @@ RUN npm install
 COPY frontend/ ./
 RUN npm run build
 
-FROM python:3.11-slim AS backend
+FROM python:3.12-slim AS backend
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd --create-home --uid 10001 gridbot
+RUN useradd --create-home --uid 10001 scalper
 
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -23,8 +23,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/app ./app
 COPY --from=frontend /frontend/dist ./static
 
-RUN chown -R gridbot:gridbot /app
-USER gridbot
+RUN chown -R scalper:scalper /app
+USER scalper
 
 ENV HOST=0.0.0.0
 ENV PORT=8000

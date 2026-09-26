@@ -1,0 +1,131 @@
+# Deployment
+
+## Requirements
+
+- A host in a region Binance serves (a blocked region returns HTTP 451; the bot
+  reports this explicitly and can route through `BINANCE_PROXY`).
+- Docker and Docker Compose.
+- Accurate system time. Binance rejects requests with skewed timestamps — run
+  `chrony` or `systemd-timesyncd` and verify with `timedatectl`.
+
+## First deployment
+
+```bash
+git clone <your-fork> scalper && cd scalper
+cp .env.sample .env && chmod 600 .env
+```
+
+Generate the credential encryption key and put it in `.env`:
+
+```bash
+python -c "import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
+```
+
+Then set, at minimum:
+
+| Variable | Why |
+| --- | --- |
+| `CREDENTIALS_ENCRYPTION_KEY` | Required before any API key can be stored |
+| `JWT_SECRET` | At least 32 random characters |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Seeded on first boot |
+| `POSTGRES_PASSWORD` / `DATABASE_URL` | Keep them in sync |
+| `SITE_URL` / `CORS_ORIGINS` | Your real origin |
+| `TRADING_MODE` | Leave at `paper` for the first run |
+
+Bring it up:
+
+```bash
+docker compose up -d --build
+docker compose logs -f backend
+```
+
+The dashboard is served by Nginx on `HTTP_PORT` (default 8080).
+
+## TLS
+
+Terminate TLS in front of Nginx — a reverse proxy such as Caddy or Traefik, or
+certbot against the bundled Nginx. Never expose the backend container port
+directly; `/metrics` is restricted to private networks in `deploy/nginx.conf`
+and that protection lives in the Nginx layer.
+
+## Binance API keys
+
+1. Create the key with **trading enabled and withdrawals disabled**.
+2. Restrict it to your server's IP address.
+3. Enter it in the dashboard under Settings → Binance API credentials. It is
+   encrypted with AES-256-GCM before storage and never returned by the API.
+4. The bot validates the key immediately and **refuses to enable live trading if
+   the key can withdraw**.
+
+Testnet keys are separate from live keys — testnet mode needs Binance testnet
+credentials.
+
+## Migrations
+
+```bash
+docker compose exec backend python -m alembic upgrade head
+```
+
+The app also creates missing tables at boot, so this matters mainly when
+upgrading an existing deployment. Take a database dump first:
+
+```bash
+docker compose exec db pg_dump -U scalper scalper > backup-$(date +%F).sql
+```
+
+## Monitoring
+
+- `GET /api/health` — component-level status (market data, Binance API, database,
+  risk engine, execution engine, position sync).
+- `GET /metrics` — Prometheus exposition: equity, open positions, realized P&L,
+  trades, win rate, max drawdown, health flag, running flag.
+
+A minimal scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: scalper
+    static_configs:
+      - targets: ["scalper_nginx:80"]
+```
+
+Useful alerts: `scalper_health_ok == 0` for 5 minutes, `scalper_running == 0`
+while you expect it running, and a sharp move in `scalper_max_drawdown_pct`.
+
+Application logs are JSON on stdout, so `docker compose logs` feeds any log
+shipper directly.
+
+## Alerts
+
+Set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`, `ALERT_WEBHOOK_URL`, and/or SMTP
+settings. Critical events (emergency stop, daily loss limit, stop-order failure,
+API failure, position mismatch) also go to email when SMTP is configured. Every
+alert is persisted and shown in the dashboard regardless of delivery success —
+alert delivery failures never interrupt trading.
+
+## Backups
+
+Back up the Postgres volume and `.env` separately. Losing
+`CREDENTIALS_ENCRYPTION_KEY` makes stored API keys unreadable; you would need to
+re-enter them.
+
+## Upgrades
+
+```bash
+git pull
+docker compose up -d --build
+docker compose exec backend python -m alembic upgrade head
+```
+
+The bot comes up **stopped** after any restart and must be started explicitly.
+Confirm the health strip is green and the mode is what you expect before starting.
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+| --- | --- |
+| HTTP 451 from Binance | Region is blocked. Set `BINANCE_PROXY` to a compliant proxy in an allowed region, or move the host. |
+| "Timestamp for this request" errors | Host clock drift. Fix NTP. |
+| `MARKET DATA FAIL` in the health strip | No successful candle fetch recently — check connectivity and rate limits. |
+| `POSITION SYNC FAIL` | The exchange and the database disagree. The bot pauses itself; reconcile manually before resuming. |
+| Live mode refused | Either live was not confirmed, or the API key has withdrawal permission enabled. |

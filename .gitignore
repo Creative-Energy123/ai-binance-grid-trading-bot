@@ -15,3 +15,6 @@ venv/
 *.log
 .idea/
 .vscode/
+*.db
+.pytest-api.db
+_alembic_tmp.db

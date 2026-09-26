@@ -1,18 +1,16 @@
-# Local development stack (Traefik is used on the VPS via GitHub Actions deploy)
+# Local / single-host stack. Nginx terminates HTTP and proxies the API + SPA.
 services:
   db:
     image: postgres:16-alpine
-    container_name: gridbot_db
+    container_name: scalper_db
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-gridbot}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gridbot}
-      POSTGRES_DB: ${POSTGRES_DB:-gridbot}
+      POSTGRES_USER: ${POSTGRES_USER:-scalper}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scalper}
+      POSTGRES_DB: ${POSTGRES_DB:-scalper}
     volumes:
-      - gridbot-pgdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+      - scalper-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gridbot}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-scalper}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -20,9 +18,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: gridbot_redis
-    ports:
-      - "6379:6379"
+    container_name: scalper_redis
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -34,27 +30,35 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: gridbot_app
+    container_name: scalper_app
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    ports:
-      - "8000:8000"
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gridbot}:${POSTGRES_PASSWORD:-gridbot}@db:5432/${POSTGRES_DB:-gridbot}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-scalper}:${POSTGRES_PASSWORD:-scalper}@db:5432/${POSTGRES_DB:-scalper}
       REDIS_URL: redis://redis:6379/0
-      SITE_URL: ${SITE_URL:-http://localhost:8000}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:8000,https://trade.creativeenergy.pk}
-      # Explicitly pass AI settings (env_file alone is easy to miss after .env edits without recreate)
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-6}
-      AI_ANALYSIS_INTERVAL_MINUTES: ${AI_ANALYSIS_INTERVAL_MINUTES:-30}
-      AI_AUTO_APPLY: ${AI_AUTO_APPLY:-false}
+      SITE_URL: ${SITE_URL:-http://localhost:8080}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:8080}
+      # The bot always comes up stopped; the mode only decides what it *could* do.
+      TRADING_MODE: ${TRADING_MODE:-paper}
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: scalper_nginx
+    depends_on:
+      - backend
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     restart: unless-stopped
 
 volumes:
-  gridbot-pgdata:
+  scalper-pgdata:

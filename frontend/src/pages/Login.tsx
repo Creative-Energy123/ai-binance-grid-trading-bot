@@ -30,9 +30,9 @@ export default function Login() {
         className="w-full max-w-md bg-panel/80 border border-white/10 rounded-2xl p-8 shadow-xl"
       >
         <p className="text-accent text-sm font-medium tracking-wide mb-1">
-          trade.creativeenergy.pk
+          Binance
         </p>
-        <h1 className="font-display text-2xl font-bold mb-6">Grid Trading Bot</h1>
+        <h1 className="font-display text-2xl font-bold mb-6">Adaptive Scalping Bot</h1>
         <label className="block text-sm mb-1 text-slate-300">Email</label>
         <input
           className="w-full mb-4 rounded-lg bg-ink border border-white/10 px-3 py-2"
@@ -58,7 +58,7 @@ export default function Login() {
           {loading ? "Signing in…" : "Sign in"}
         </button>
         <p className="text-xs text-slate-500 mt-4">
-          Real money risk. Use Binance Testnet until you understand the strategy.
+          Trading risks real money. Stay in paper and testnet mode until backtests, paper runs and the go-live checklist all pass.
         </p>
       </form>
     </div>

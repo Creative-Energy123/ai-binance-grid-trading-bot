@@ -11,7 +11,10 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{ROOT / '.pytest-api.db'}")
+os.environ.setdefault("ADMIN_EMAIL", "admin@test.local")
+os.environ.setdefault("ADMIN_PASSWORD", "test-password-123")
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-that-is-long-enough-123456")
 os.environ.setdefault("CREDENTIALS_ENCRYPTION_KEY", "")
 
 MINUTE_MS = 60_000

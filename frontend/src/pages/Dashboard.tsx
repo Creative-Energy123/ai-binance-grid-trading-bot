@@ -1,329 +1,161 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { api, clearToken } from "../lib/api";
+import { useState } from "react";
+import { clearTokens, post } from "../lib/api";
+import { when } from "../lib/format";
+import type { BotStatus, Health } from "../lib/types";
+import { usePoll } from "../lib/usePoll";
+import { Badge, Button, ErrorNote } from "../components/ui";
+import OverviewTab from "../tabs/OverviewTab";
+import LiveTab from "../tabs/LiveTab";
+import ScannerTab from "../tabs/ScannerTab";
+import JournalTab from "../tabs/JournalTab";
+import BacktestTab from "../tabs/BacktestTab";
+import AssistantTab from "../tabs/AssistantTab";
+import SettingsTab from "../tabs/SettingsTab";
 
-type Status = {
-  running: boolean;
-  killed: boolean;
-  live_confirmed: boolean;
-  testnet: boolean;
-  last_price: number | null;
-  realized_pnl: number;
-  unrealized_pnl: number;
-  daily_pnl: number;
-  status_message: string;
-  max_capital_usdt: number;
-  symbol: string | null;
-};
+const TABS = [
+  { id: "overview", label: "Overview" },
+  { id: "live", label: "Live Trading" },
+  { id: "scanner", label: "Scanner" },
+  { id: "journal", label: "Journal" },
+  { id: "backtest", label: "Research" },
+  { id: "assistant", label: "AI Assistant" },
+  { id: "settings", label: "Settings" },
+] as const;
 
-type Config = {
-  symbol: string;
-  lower_price: number;
-  upper_price: number;
-  grid_count: number;
-  grid_type: string;
-  capital_usdt: number;
-  take_profit_pct: number;
-  stop_loss_pct: number;
-  max_drawdown_pct: number;
-  daily_loss_limit_usdt: number;
-};
-
-type Trade = {
-  id: number;
-  side: string;
-  price: number;
-  quantity: number;
-  pnl: number;
-  created_at: string;
-};
-
-type AiRow = {
-  id: number;
-  trend: string;
-  volatility_regime: string;
-  risk_warnings: string;
-  suggested_lower: number | null;
-  suggested_upper: number | null;
-  approved: boolean;
-  applied: boolean;
-  created_at: string;
-};
-
-const emptyConfig: Config = {
-  symbol: "BTC/USDT",
-  lower_price: 90000,
-  upper_price: 110000,
-  grid_count: 10,
-  grid_type: "arithmetic",
-  capital_usdt: 100,
-  take_profit_pct: 0.5,
-  stop_loss_pct: 5,
-  max_drawdown_pct: 10,
-  daily_loss_limit_usdt: 50,
-};
+type TabId = (typeof TABS)[number]["id"];
 
 export default function Dashboard() {
-  const nav = useNavigate();
-  const [status, setStatus] = useState<Status | null>(null);
-  const [config, setConfig] = useState<Config>(emptyConfig);
-  const [trades, setTrades] = useState<Trade[]>([]);
-  const [ai, setAi] = useState<AiRow[]>([]);
-  const [error, setError] = useState("");
-  const [msg, setMsg] = useState("");
+  const [tab, setTab] = useState<TabId>("overview");
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const status = usePoll<BotStatus>("/api/bot/status", 5000);
+  const health = usePoll<Health>("/api/health", 15000);
+  const bot = status.data;
+
+  async function act(path: string, body?: unknown, confirmText?: string) {
+    if (confirmText && !window.confirm(confirmText)) return;
+    setBusy(true);
+    setActionError(null);
     try {
-      const [s, c, t, a] = await Promise.all([
-        api<Status>("/api/status"),
-        api<Config | null>("/api/config"),
-        api<Trade[]>("/api/trades?limit=30"),
-        api<AiRow[]>("/api/ai?limit=10"),
-      ]);
-      setStatus(s);
-      if (c) setConfig(c);
-      setTrades(t);
-      setAi(a);
-      setError("");
+      await post(path, body);
+      await status.reload();
+      await health.reload();
     } catch (err) {
-      if (err instanceof Error && err.message === "Unauthorized") {
-        nav("/login");
-        return;
-      }
-      setError(err instanceof Error ? err.message : "Failed to load");
-    }
-  }, [nav]);
-
-  useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, 10000);
-    return () => clearInterval(id);
-  }, [refresh]);
-
-  async function post(path: string, body?: unknown) {
-    setMsg("");
-    setError("");
-    try {
-      await api(path, {
-        method: "POST",
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-      });
-      setMsg("OK");
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Action failed");
+      setActionError((err as Error).message);
+    } finally {
+      setBusy(false);
     }
   }
 
-  async function saveConfig(e: FormEvent) {
-    e.preventDefault();
-    setError("");
-    try {
-      await api("/api/config", { method: "PUT", body: JSON.stringify(config) });
-      setMsg("Config saved");
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Save failed");
-    }
-  }
-
-  function logout() {
-    clearToken();
-    nav("/login");
-  }
+  const modeTone = bot?.mode === "live" ? "bad" : bot?.mode === "testnet" ? "warn" : "info";
+  const runTone = bot?.emergency_stopped ? "bad" : bot?.paused ? "warn" : bot?.running ? "ok" : "muted";
+  const runLabel = bot?.emergency_stopped
+    ? "EMERGENCY STOPPED"
+    : bot?.paused
+      ? "PAUSED"
+      : bot?.running
+        ? "RUNNING"
+        : "STOPPED";
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-8">
-      <header className="flex flex-wrap items-end justify-between gap-4 mb-8">
-        <div>
-          <p className="text-accent text-sm">trade.creativeenergy.pk</p>
-          <h1 className="text-3xl font-bold font-display">AI Grid Trading Bot</h1>
-          <p className="text-slate-400 text-sm mt-1">
-            Advisory AI only — grid orders require your start / kill controls.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <span
-            className={`px-3 py-1 rounded-full text-xs font-mono ${
-              status?.testnet ? "bg-warn/20 text-warn" : "bg-danger/20 text-danger"
-            }`}
-          >
-            {status?.testnet ? "TESTNET" : "LIVE"}
-          </span>
-          <button onClick={logout} className="text-sm text-slate-400 hover:text-white">
-            Log out
-          </button>
+    <div className="min-h-screen text-slate-100">
+      <header className="border-b border-slate-800 bg-ink/70 px-4 py-3 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-3">
+          <div className="mr-auto">
+            <h1 className="text-base font-semibold">Adaptive Scalping Bot</h1>
+            <p className="text-xs text-slate-400">
+              {bot?.status_message || "…"} · last tick {when(bot?.last_tick_at)}
+            </p>
+          </div>
+          <Badge tone={modeTone}>{(bot?.mode || "…").toUpperCase()}</Badge>
+          <Badge tone={runTone}>{runLabel}</Badge>
+          {bot?.places_real_orders && <Badge tone="bad">REAL ORDERS</Badge>}
+          <Button onClick={() => { clearTokens(); location.href = "/login"; }}>Sign out</Button>
         </div>
       </header>
 
-      {(error || msg) && (
-        <div
-          className={`mb-4 rounded-lg px-4 py-2 text-sm ${
-            error ? "bg-danger/20 text-danger" : "bg-accent/20 text-accent"
-          }`}
-        >
-          {error || msg}
-        </div>
-      )}
-
-      <section className="grid md:grid-cols-4 gap-4 mb-8">
-        {[
-          ["Status", status?.status_message ?? "—"],
-          ["Last price", status?.last_price?.toFixed(2) ?? "—"],
-          ["Realized PnL", status?.realized_pnl?.toFixed(4) ?? "—"],
-          ["Daily PnL", status?.daily_pnl?.toFixed(4) ?? "—"],
-        ].map(([label, value]) => (
-          <div key={label} className="bg-panel/70 border border-white/10 rounded-xl p-4">
-            <p className="text-xs text-slate-400 uppercase tracking-wide">{label}</p>
-            <p className="font-mono text-lg mt-1">{value}</p>
-          </div>
-        ))}
-      </section>
-
-      <div className="flex flex-wrap gap-2 mb-8">
-        <button
-          onClick={() => post("/api/bot/start")}
-          className="bg-accent text-ink font-semibold px-4 py-2 rounded-lg"
-        >
-          Start
-        </button>
-        <button
-          onClick={() => post("/api/bot/stop")}
-          className="bg-white/10 px-4 py-2 rounded-lg"
-        >
-          Stop
-        </button>
-        <button
-          onClick={() => post("/api/bot/kill")}
-          className="bg-danger text-white font-semibold px-4 py-2 rounded-lg"
-        >
-          Kill switch
-        </button>
-        <button
-          onClick={() => post("/api/bot/clear-kill")}
-          className="bg-white/10 px-4 py-2 rounded-lg"
-        >
-          Clear kill
-        </button>
-        <button
-          onClick={() => post("/api/ai/run")}
-          className="bg-white/10 px-4 py-2 rounded-lg"
-        >
-          Run AI analysis
-        </button>
-        {!status?.testnet && !status?.live_confirmed && (
-          <button
+      <div className="border-b border-slate-800 bg-ink/40 px-4 py-2">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-2">
+          <Button tone="primary" disabled={busy || bot?.running} onClick={() => act("/api/bot/start")}>
+            Start bot
+          </Button>
+          <Button tone="warn" disabled={busy || !bot?.running} onClick={() => act("/api/bot/pause")}>
+            Pause new trades
+          </Button>
+          <Button disabled={busy || !bot?.running} onClick={() => act("/api/bot/stop")}>
+            Stop
+          </Button>
+          <Button
+            tone="warn"
+            disabled={busy}
+            onClick={() => act("/api/bot/close-all", undefined, "Close every open position at market?")}
+          >
+            Close all positions
+          </Button>
+          <Button
+            tone="danger"
+            disabled={busy}
             onClick={() =>
-              post("/api/bot/confirm-live", { confirm_phrase: "ENABLE LIVE TRADING" })
+              act(
+                "/api/bot/emergency-stop",
+                { close_positions: true },
+                "EMERGENCY STOP: cancel all orders and flatten every position?",
+              )
             }
-            className="bg-warn text-ink font-semibold px-4 py-2 rounded-lg"
           >
-            Confirm live trading
-          </button>
-        )}
-      </div>
-
-      <div className="grid lg:grid-cols-2 gap-6 mb-8">
-        <form onSubmit={saveConfig} className="bg-panel/70 border border-white/10 rounded-xl p-5 space-y-3">
-          <h2 className="font-semibold text-lg mb-2">Grid configuration</h2>
-          {(
-            [
-              ["symbol", "Symbol"],
-              ["lower_price", "Lower price"],
-              ["upper_price", "Upper price"],
-              ["grid_count", "Grid count"],
-              ["capital_usdt", "Capital USDT"],
-              ["max_drawdown_pct", "Max drawdown %"],
-              ["daily_loss_limit_usdt", "Daily loss limit"],
-            ] as const
-          ).map(([key, label]) => (
-            <div key={key}>
-              <label className="text-xs text-slate-400">{label}</label>
-              <input
-                className="w-full mt-1 rounded-lg bg-ink border border-white/10 px-3 py-2 font-mono text-sm"
-                value={String(config[key])}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    [key]:
-                      key === "symbol"
-                        ? e.target.value
-                        : key === "grid_count"
-                          ? Number(e.target.value)
-                          : Number(e.target.value),
-                  })
-                }
-              />
-            </div>
-          ))}
-          <select
-            className="w-full rounded-lg bg-ink border border-white/10 px-3 py-2"
-            value={config.grid_type}
-            onChange={(e) => setConfig({ ...config, grid_type: e.target.value })}
-          >
-            <option value="arithmetic">Arithmetic</option>
-            <option value="geometric">Geometric</option>
-          </select>
-          <p className="text-xs text-slate-500">
-            Hard capital cap: {status?.max_capital_usdt ?? "—"} USDT
-          </p>
-          <button type="submit" className="bg-accent text-ink font-semibold px-4 py-2 rounded-lg">
-            Save config
-          </button>
-        </form>
-
-        <div className="bg-panel/70 border border-white/10 rounded-xl p-5">
-          <h2 className="font-semibold text-lg mb-3">AI analysis (advisory)</h2>
-          <ul className="space-y-3 max-h-96 overflow-auto">
-            {ai.length === 0 && <li className="text-slate-500 text-sm">No analyses yet.</li>}
-            {ai.map((row) => (
-              <li key={row.id} className="border border-white/5 rounded-lg p-3 text-sm">
-                <p className="font-mono text-xs text-slate-400">{row.created_at}</p>
-                <p>
-                  <span className="text-accent">{row.trend}</span> · {row.volatility_regime}
-                </p>
-                <p className="text-warn mt-1">{row.risk_warnings}</p>
-                {!row.applied && (
-                  <button
-                    className="mt-2 text-xs underline text-slate-300"
-                    onClick={() => post(`/api/ai/${row.id}/apply`)}
-                  >
-                    Apply suggestion
-                  </button>
-                )}
-              </li>
+            Emergency stop
+          </Button>
+          <div className="ml-auto flex items-center gap-2 text-[11px] text-slate-400">
+            {health.data?.components.map((c) => (
+              <span key={c.name} title={c.detail}>
+                <Badge tone={c.status === "OK" ? "ok" : "bad"}>
+                  {c.name} {c.status}
+                </Badge>
+              </span>
             ))}
-          </ul>
+          </div>
         </div>
       </div>
 
-      <div className="bg-panel/70 border border-white/10 rounded-xl p-5">
-        <h2 className="font-semibold text-lg mb-3">Recent trades</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm font-mono">
-            <thead className="text-slate-400 text-left">
-              <tr>
-                <th className="py-2">Side</th>
-                <th>Price</th>
-                <th>Qty</th>
-                <th>PnL</th>
-                <th>Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              {trades.map((t) => (
-                <tr key={t.id} className="border-t border-white/5">
-                  <td className="py-2">{t.side}</td>
-                  <td>{t.price}</td>
-                  <td>{t.quantity}</td>
-                  <td>{t.pnl}</td>
-                  <td>{new Date(t.created_at).toLocaleString()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <nav className="border-b border-slate-800 bg-ink/20 px-4">
+        <div className="mx-auto flex max-w-7xl gap-1 overflow-x-auto">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`whitespace-nowrap border-b-2 px-3 py-2 text-xs transition ${
+                tab === t.id
+                  ? "border-accent text-emerald-300"
+                  : "border-transparent text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
-      </div>
+      </nav>
+
+      <main className="mx-auto max-w-7xl px-4 py-4">
+        <ErrorNote message={actionError || status.error} />
+        {bot?.mode === "live" && (
+          <p className="mb-3 rounded border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+            Live mode places real orders with real money. Losses are real and no configuration
+            guarantees a profit. Verify the go-live checklist before starting the bot.
+          </p>
+        )}
+        {tab === "overview" && <OverviewTab bot={bot} />}
+        {tab === "live" && <LiveTab />}
+        {tab === "scanner" && <ScannerTab />}
+        {tab === "journal" && <JournalTab />}
+        {tab === "backtest" && <BacktestTab symbols={bot?.symbols || []} />}
+        {tab === "assistant" && <AssistantTab symbols={bot?.symbols || []} />}
+        {tab === "settings" && <SettingsTab bot={bot} onChanged={status.reload} />}
+      </main>
+
+      <footer className="px-4 pb-8 pt-2 text-center text-[11px] text-slate-600">
+        Backtested and simulated results are not evidence of future returns.
+      </footer>
     </div>
   );
 }

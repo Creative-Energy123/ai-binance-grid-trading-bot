@@ -1,133 +1,156 @@
-# AI-Assisted Binance Grid Trading Bot
+# Binance Adaptive Scalping Bot
 
-Self-hosted spot **grid trading** bot with an authenticated dashboard, Anthropic (Claude) **advisory** analysis, and Docker / GitHub Actions deploy to **https://trade.creativeenergy.pk**.
+A regime-aware scalping system for Binance Spot and USDT-M Futures, with a FastAPI
+backend, a React dashboard, an event-driven backtester and an AI assistant that
+explains the bot's decisions.
 
-> **Risk disclaimer:** Grid strategies can lose significant capital in trending markets. Nothing here guarantees profit. Default is **Binance Testnet**. Enable live trading only after backtests, with withdrawals disabled on the API key, IP restriction to your VPS, and a hard capital cap.
+**It is not a profit machine.** The design goal is capital preservation: the bot
+is built so that *doing nothing* is a normal, frequent and correct outcome. No
+configuration in this repository guarantees or implies a profit, and backtested
+or simulated results are not evidence of future returns.
 
-Deploy pattern mirrors [Mind-Sync-Clinic](../Mind-Sync-Clinic): build → push to GHCR → SSH to VPS → Traefik-labeled `docker compose`.
+---
 
-## Stack
+## What makes it different from an indicator bot
 
-| Layer | Tech |
-|--------|------|
-| API | Python 3.11, FastAPI, APScheduler |
-| Exchange | ccxt (Binance spot, testnet/live) |
-| AI | Anthropic API (server-side only) |
-| UI | React, TypeScript, Tailwind (served by API in prod) |
-| Data | PostgreSQL 16, Redis 7 |
-| Edge | Traefik + Let's Encrypt on VPS (`web` Docker network) |
+It never runs a rule like `RSI < 30 → BUY`. Every decision passes through a
+pipeline, and any stage can stop the trade:
 
-## Local quick start
+```
+MarketDataService      candles for 15m / 5m / 1m, closed candles only
+        ↓
+IndicatorEngine        EMA, RSI, MACD, ADX, ATR, Bollinger, VWAP, volume
+        ↓
+MarketRegimeEngine     bull / bear / ranging / high-vol / low-vol / unclear
+        ↓
+SignalEngine           strategies allowed by the regime, scored 0–100
+        ↓
+RiskEngine             can veto any signal
+        ↓
+PositionSizer          quantity derived from risk, not from a fixed amount
+        ↓
+ExecutionEngine        order placement, fill confirmation, protective stop
+        ↓
+OrderManager           reconciliation, partial fills, retries
+        ↓
+PortfolioManager       equity, snapshots, performance
+```
+
+A typical outcome looks like this:
+
+```
+BTCUSDT
+Market regime: Strong Bull
+  Trend strategy:  ENABLED
+  Range strategy:  DISABLED
+  Short strategy:  DISABLED
+Signal: LONG · Score 84/100 · Risk 0.35%
+```
+
+and just as often like this:
+
+```
+BTCUSDT
+Market regime: Unclear / High Volatility
+Trading: DISABLED
+Reason: conflicting higher-timeframe signals
+```
+
+## Trading modes
+
+| Mode | Places orders | Uses real money | Notes |
+| --- | --- | --- | --- |
+| `backtest` | no | no | Historical replay in the Research tab |
+| `paper` | no | no | Live Binance data, simulated fills with fees and slippage |
+| `testnet` | yes | no | Binance testnet keys |
+| `live` | yes | **yes** | Requires an explicit confirmation phrase and key validation |
+
+The bot always comes up **stopped** after a restart, in whatever mode was last
+set. Switching to `live` additionally requires confirming in the dashboard, and
+the confirmation is refused if the API key has withdrawal permission enabled.
+
+## Quick start
 
 ```bash
 cp .env.sample .env
-# edit .env — set ADMIN_PASSWORD, JWT_SECRET, POSTGRES_PASSWORD
+python -c "import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
+# paste the value into CREDENTIALS_ENCRYPTION_KEY, then set ADMIN_PASSWORD and JWT_SECRET
 docker compose up -d --build
 ```
 
-- App: http://localhost:8000  
-- Health: http://localhost:8000/api/health  
-- Login with `ADMIN_EMAIL` / `ADMIN_PASSWORD`
+The dashboard is then on <http://localhost:8080>. Sign in with `ADMIN_EMAIL` /
+`ADMIN_PASSWORD`.
 
-Frontend-only dev:
+### Local development
+
+```bash
+cd backend && pip install -r requirements-dev.txt && uvicorn app.main:app --reload
+```
 
 ```bash
 cd frontend && npm install && npm run dev
-# API on :8000, Vite proxies /api
 ```
 
-## Production domain
-
-| Setting | Value |
-|---------|--------|
-| Public URL | `https://trade.creativeenergy.pk` |
-| Traefik host | `trade.creativeenergy.pk` (+ `www`) |
-| Remote app dir | `~/ai-binance-grid-trading-bot` |
-| Containers | `gridbot_app`, `gridbot_db`, `gridbot_redis` |
-| GHCR image | `ghcr.io/creative-energy123/ai-binance-grid-trading-bot` |
-
-Adjust `IMAGE_NAME` in `.github/workflows/deploy.yml` if your GitHub owner/org differs from `creative-energy123`.
-
-## GitHub Actions deploy (Mind-Sync style)
-
-Workflow: `.github/workflows/deploy.yml`
-
-1. On `main` push: build multi-stage Docker image, push to GHCR  
-2. SSH to VPS (`appleboy/ssh-action`), pull image, write `docker-compose.yml` with Traefik labels  
-3. `docker compose up -d`, health-check `/api/health`
-
-### Repository secrets
-
-| Secret | Purpose |
-|--------|---------|
-| `VPS_HOST` | VPS IP or hostname |
-| `VPS_USER` | SSH user |
-| `VPS_PASSWORD` | SSH password (also used for `sudo`) |
-| `ADMIN_EMAIL` | Dashboard admin email (seeded) |
-| `ADMIN_PASSWORD` | Dashboard admin password |
-| `JWT_SECRET` | JWT signing secret (≥32 chars) |
-| `BINANCE_API_KEY` | Binance API key (trading only) |
-| `BINANCE_API_SECRET` | Binance API secret |
-| `ANTHROPIC_API_KEY` | Claude API key |
-| `POSTGRES_PASSWORD` | Postgres password |
-| `TELEGRAM_BOT_TOKEN` | Optional alerts |
-| `TELEGRAM_CHAT_ID` | Optional alerts |
-| `ALERT_WEBHOOK_URL` | Optional generic webhook |
-
-`GITHUB_TOKEN` is provided by Actions for GHCR login (same as Mind-Sync).
-
-### Repository variables
-
-| Variable | Example / default |
-|----------|-------------------|
-| `SITE_URL` | `https://trade.creativeenergy.pk` |
-| `APP_DOMAIN` | `trade.creativeenergy.pk` |
-| `CORS_ORIGINS` | `https://trade.creativeenergy.pk` |
-| `BINANCE_TESTNET` | `true` |
-| `MAX_CAPITAL_USDT` | `500` |
-| `POSTGRES_USER` | `gridbot` |
-| `POSTGRES_DB` | `gridbot` |
-| `AI_ANALYSIS_INTERVAL_MINUTES` | `30` |
-| `AI_AUTO_APPLY` | `false` |
-
-## VPS prerequisites (one-time)
-
-1. Docker + Docker Compose plugin installed  
-2. Traefik already running and attached to external Docker network **`web`** (same as Mind-Sync Clinic) with `web` / `websecure` entrypoints and `letsencrypt` cert resolver  
-3. DNS **A record**: `trade.creativeenergy.pk` → VPS public IP (and optional `www`)  
-4. Ports 80/443 open to Traefik  
-5. Push this repo to GitHub under an account that can publish `ghcr.io/<owner>/ai-binance-grid-trading-bot` (package write on push)  
-6. After first deploy, confirm: `https://trade.creativeenergy.pk/api/health`
-
-If Traefik is not yet installed on the VPS, install it before the first Actions deploy (Mind-Sync already expects this shared `web` network).
-
-## Binance API key checklist
-
-1. Prefer **Testnet** keys until you are ready  
-2. Live key: **enable spot trading only**, **disable withdrawals**  
-3. Restrict key to the VPS static IP  
-4. Live mode: set `BINANCE_TESTNET=false`, then in the UI click **Confirm live trading** (phrase `ENABLE LIVE TRADING`)
-
-## Kill switch & risk controls
-
-- UI / `POST /api/bot/kill` — cancel open orders and halt  
-- Max drawdown % and daily loss limit auto-halt  
-- `MAX_CAPITAL_USDT` hard cap per instance  
-- AI suggestions require **Apply** unless `AI_AUTO_APPLY=true`  
-- AI never places exchange orders
-
-## Project layout
-
-```
-.ai-binance-grid-trading-bot/
-  .github/workflows/deploy.yml
-  backend/app/          # FastAPI, grid engine, Binance, Anthropic
-  frontend/             # React dashboard
-  Dockerfile            # frontend build + API image
-  docker-compose.yml    # local db/redis/app
-  .env.sample
+```bash
+cd backend && python -m pytest        # 48 tests, no network access needed
+cd frontend && npm run typecheck
 ```
 
-## License / responsibility
+### Database migrations
 
-You are solely responsible for exchange account security, regulatory compliance, and trading losses. This software is provided as a self-hosted toolkit, not financial advice.
+```bash
+cd backend
+DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/scalper python -m alembic upgrade head
+```
+
+The app also creates tables on first boot, so migrations matter mainly for
+upgrades to an existing deployment.
+
+## Documentation
+
+| Document | What it covers |
+| --- | --- |
+| [docs/STRATEGY.md](docs/STRATEGY.md) | Regime detection, the three strategies, scoring, stops and targets |
+| [docs/RISK.md](docs/RISK.md) | Every risk limit, how sizing works, what halts the bot |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production deployment, secrets, monitoring, backups |
+| [docs/GO_LIVE_CHECKLIST.md](docs/GO_LIVE_CHECKLIST.md) | The checks to complete before enabling live trading |
+
+## API surface
+
+| Area | Endpoints |
+| --- | --- |
+| Auth | `POST /api/auth/login`, `POST /api/auth/refresh`, `GET /api/auth/me` |
+| Bot | `GET /api/bot/status`, `/overview`, `/positions`, `/evaluations`, `POST /start` `/pause` `/stop` `/close-all` `/emergency-stop` `/mode` `/confirm-live` `/risk-config` |
+| Market | `GET /api/market/scan`, `/candles`, `/analysis/{symbol}` |
+| Journal | `GET /api/journal/trades`, `/trades.csv`, `/signals`, `/risk-events`, `/alerts`, `/performance` |
+| Research | `POST /api/research/backtest`, `GET /api/research/backtests` |
+| AI | `POST /api/ai/ask`, `/explain/{symbol}`, `GET /api/ai/history` |
+| Ops | `GET /api/health`, `GET /metrics` (Prometheus) |
+
+Interactive docs are at `/docs` when the backend runs.
+
+## Security
+
+- Exchange credentials are encrypted at rest with AES-256-GCM and are never
+  returned by any endpoint — the API exposes only a masked fragment.
+- JWT access tokens plus rotating refresh tokens; roles are `viewer` /
+  `trader` / `admin`.
+- Login lockout after repeated failures, audit logging on every state change,
+  rate limiting and security headers at the Nginx layer.
+- **Never enable withdrawal permission on the Binance API key.** Restrict the key
+  to your server's IP address. The bot refuses to go live with a withdrawal-capable key.
+
+## The AI assistant
+
+It reads the bot's own state — regime, indicators, score breakdown, risk
+decisions, recent trades — and explains it. It has no order-placement path, it
+cannot change configuration, and its prompt forbids claiming any trade will be
+profitable.
+
+## Disclaimer
+
+This software is provided for research and educational purposes. Trading
+cryptocurrency carries substantial risk of loss, and leveraged futures trading
+can lose more than the initial margin. You are responsible for any orders this
+software places on your behalf. Do not run it with money you cannot afford to
+lose.

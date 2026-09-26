@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import (
+    as_utc,
     audit,
     consume_refresh_token,
     create_access_token,
@@ -34,10 +35,11 @@ async def login(
     ).scalar_one_or_none()
     now = datetime.now(timezone.utc)
 
-    if user and user.locked_until and user.locked_until > now:
+    locked_until = as_utc(user.locked_until) if user else None
+    if locked_until and locked_until > now:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Account locked until {user.locked_until.isoformat()}",
+            detail=f"Account locked until {locked_until.isoformat()}",
         )
 
     if user is None or not verify_password(form_data.password, user.password_hash):

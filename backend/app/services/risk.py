@@ -130,11 +130,14 @@ def evaluate_limits(
         f"{state.trades_last_hour} trades in the last hour reached the cap of {settings.max_trades_per_hour}",
     )
 
-    in_cooldown = bool(state.cooldown_until and state.cooldown_until > now)
+    cooldown_until = state.cooldown_until
+    if cooldown_until is not None and cooldown_until.tzinfo is None:
+        cooldown_until = cooldown_until.replace(tzinfo=timezone.utc)
+    in_cooldown = bool(cooldown_until and cooldown_until > now)
     check(
         "cooldown",
         not in_cooldown,
-        f"Post-loss cooldown active until {state.cooldown_until.isoformat()}" if in_cooldown else "",
+        f"Post-loss cooldown active until {cooldown_until.isoformat()}" if in_cooldown else "",
     )
 
     risk_amount = equity * settings.risk_per_trade_pct / 100
