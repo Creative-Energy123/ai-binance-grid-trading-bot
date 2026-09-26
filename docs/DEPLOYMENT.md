@@ -83,6 +83,18 @@ getent hosts your-domain.example
 | `VPS_HOST` | secret | New IP or hostname |
 | `VPS_USER` / `VPS_PASSWORD` | secret | Credentials on the new host |
 | `VPS_PORT` | variable | Only if SSH is not on 22 — e.g. `2222` |
+| `VPS_SSH_KEY` | secret | Optional private key; used instead of the password when set |
+
+Key authentication is more reliable than a password here, because some hosts
+run fail2ban or a low `MaxStartups` and reset repeated password handshakes. To
+use it, generate a key, add the public half to the host and the private half to
+the secret:
+
+```bash
+ssh-keygen -t ed25519 -f deploy_key -N ""
+ssh-copy-id -i deploy_key.pub -p 2222 user@your-host
+# paste the contents of deploy_key (the private half) into VPS_SSH_KEY
+```
 
 **6. Deploy** by pushing to `main`, or run the workflow manually.
 

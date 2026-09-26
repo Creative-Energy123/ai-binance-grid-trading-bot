@@ -202,6 +202,8 @@ jobs:
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
+          # Key auth is used when VPS_SSH_KEY is set; otherwise the password is.
+          key: ${{ secrets.VPS_SSH_KEY }}
           password: ${{ secrets.VPS_PASSWORD }}
           port: ${{ vars.VPS_PORT || secrets.VPS_PORT || 22 }}
           envs: REGISTRY,APP_IMAGE,RESET_DATABASE,REBUILD_IMAGE,SITE_URL,APP_DOMAIN,CORS_ORIGINS,TRADING_MODE,SYMBOLS,FUTURES_ENABLED,FUTURES_LEVERAGE,RISK_PER_TRADE_PCT,MAX_DAILY_LOSS_PCT,MAX_POSITIONS,MINIMUM_SIGNAL_SCORE,TAKER_FEE_PCT,SLIPPAGE_PCT,POSTGRES_USER,POSTGRES_DB,ANTHROPIC_MODEL,CREDENTIALS_ENCRYPTION_KEY,ADMIN_EMAIL,ADMIN_PASSWORD,JWT_SECRET,BINANCE_API_KEY,BINANCE_API_SECRET,BINANCE_PROXY,HTTPS_PROXY,ANTHROPIC_API_KEY,POSTGRES_PASSWORD,POSTGRES_PASSWORD_ENC,TELEGRAM_BOT_TOKEN,TELEGRAM_CHAT_ID,ALERT_WEBHOOK_URL,VPS_PASSWORD,GH_TOKEN
@@ -479,7 +481,20 @@ jobs:
             echo "$VPS_PASSWORD" | sudo -S docker compose logs --tail 50 scalper
 
             echo "=== Health check (internal) ==="
-            echo "$VPS_PASSWORD" | sudo -S docker exec scalper_app curl -fsS http://127.0.0.1:8000/api/health || echo "Health check failed"
+            # The app can legitimately report "degraded" (for example when Binance
+            # is unreachable), but it must be answering at all. A container that is
+            # restarting in a loop has repeatedly been reported as a good deploy.
+            HEALTH=""
+            for i in $(seq 1 12); do
+              HEALTH=$(echo "$VPS_PASSWORD" | sudo -S docker exec scalper_app curl -fsS http://127.0.0.1:8000/api/health 2>/dev/null) && break
+              sleep 5
+            done
+            if [ -z "$HEALTH" ]; then
+              echo "::error::The app never answered /api/health. Recent logs:"
+              echo "$VPS_PASSWORD" | sudo -S docker compose logs --tail 60 scalper
+              exit 1
+            fi
+            echo "$HEALTH"
 
             echo "=== DNS check ==="
             if getent hosts "$APP_DOMAIN" >/dev/null 2>&1; then
@@ -492,21 +507,3 @@ jobs:
 
             echo "Deployment completed in $TRADING_MODE mode. The bot starts STOPPED and must be started from the dashboard."
             echo "Site: $SITE_URL"
-
-      - name: Verify Deployment
-        uses: appleboy/ssh-action@v1.0.3
-        env:
-          VPS_PASSWORD: ${{ secrets.VPS_PASSWORD }}
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          password: ${{ secrets.VPS_PASSWORD }}
-          port: ${{ vars.VPS_PORT || secrets.VPS_PORT || 22 }}
-          envs: VPS_PASSWORD
-          script: |
-            cd ~/ai-binance-grid-trading-bot
-            echo "$VPS_PASSWORD" | sudo -S docker compose ps
-            echo "=== App Logs ==="
-            echo "$VPS_PASSWORD" | sudo -S docker compose logs --tail 30 scalper
-            echo "=== Health ==="
-            echo "$VPS_PASSWORD" | sudo -S docker exec scalper_app curl -fsS http://127.0.0.1:8000/api/health || true
