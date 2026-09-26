@@ -284,16 +284,64 @@ jobs:
             : "${POSTGRES_DB:=gridbot}"
             : "${ANTHROPIC_MODEL:=claude-sonnet-5}"
 
+            # Secrets are written to a literal env file with printf, never
+            # interpolated into the compose YAML. Compose performs its own $
+            # substitution on the YAML, which silently corrupts any value
+            # containing a dollar sign — and corrupts it differently for the
+            # database and the app, producing an authentication failure that
+            # looks like a wrong password.
+            umask 077
+            {
+              printf 'POSTGRES_USER=%s\n' "$POSTGRES_USER"
+              printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+              printf 'POSTGRES_DB=%s\n' "$POSTGRES_DB"
+              printf 'HOST=%s\n' "0.0.0.0"
+              printf 'PORT=%s\n' "8000"
+              printf 'SITE_URL=%s\n' "$SITE_URL"
+              printf 'CORS_ORIGINS=%s\n' "$CORS_ORIGINS"
+              printf 'DATABASE_URL=postgresql+asyncpg://%s:%s@db:5432/%s\n' "$POSTGRES_USER" "$POSTGRES_PASSWORD_ENC" "$POSTGRES_DB"
+              printf 'REDIS_URL=%s\n' "redis://redis:6379/0"
+              printf 'CREDENTIALS_ENCRYPTION_KEY=%s\n' "$CREDENTIALS_ENCRYPTION_KEY"
+              printf 'ADMIN_EMAIL=%s\n' "$ADMIN_EMAIL"
+              printf 'ADMIN_PASSWORD=%s\n' "$ADMIN_PASSWORD"
+              printf 'JWT_SECRET=%s\n' "$JWT_SECRET"
+              printf 'TRADING_MODE=%s\n' "$TRADING_MODE"
+              printf 'SYMBOLS=%s\n' "$SYMBOLS"
+              printf 'FUTURES_ENABLED=%s\n' "$FUTURES_ENABLED"
+              printf 'FUTURES_LEVERAGE=%s\n' "$FUTURES_LEVERAGE"
+              printf 'RISK_PER_TRADE_PCT=%s\n' "$RISK_PER_TRADE_PCT"
+              printf 'MAX_DAILY_LOSS_PCT=%s\n' "$MAX_DAILY_LOSS_PCT"
+              printf 'MAX_POSITIONS=%s\n' "$MAX_POSITIONS"
+              printf 'MINIMUM_SIGNAL_SCORE=%s\n' "$MINIMUM_SIGNAL_SCORE"
+              printf 'TAKER_FEE_PCT=%s\n' "$TAKER_FEE_PCT"
+              printf 'SLIPPAGE_PCT=%s\n' "$SLIPPAGE_PCT"
+              printf 'BINANCE_API_KEY=%s\n' "$BINANCE_API_KEY"
+              printf 'BINANCE_API_SECRET=%s\n' "$BINANCE_API_SECRET"
+              printf 'BINANCE_PROXY=%s\n' "$BINANCE_PROXY"
+              printf 'HTTPS_PROXY=%s\n' "$HTTPS_PROXY"
+              printf 'ANTHROPIC_API_KEY=%s\n' "$ANTHROPIC_API_KEY"
+              printf 'ANTHROPIC_MODEL=%s\n' "$ANTHROPIC_MODEL"
+              printf 'TELEGRAM_BOT_TOKEN=%s\n' "$TELEGRAM_BOT_TOKEN"
+              printf 'TELEGRAM_CHAT_ID=%s\n' "$TELEGRAM_CHAT_ID"
+              printf 'ALERT_WEBHOOK_URL=%s\n' "$ALERT_WEBHOOK_URL"
+            } > stack.env
+            chmod 600 stack.env
+            echo "Wrote stack.env with $(wc -l < stack.env) settings (values not logged)."
+
+            # A value containing a newline would silently truncate the env file.
+            if [ "$(grep -c '=' stack.env)" != "$(wc -l < stack.env)" ]; then
+              echo "::error::stack.env is malformed — a secret probably contains a newline."
+              exit 1
+            fi
+
             cat > docker-compose.yml <<COMPOSE
             services:
               db:
                 image: postgres:16-alpine
                 container_name: scalper_db
                 restart: unless-stopped
-                environment:
-                  POSTGRES_USER: "$POSTGRES_USER"
-                  POSTGRES_PASSWORD: "$POSTGRES_PASSWORD"
-                  POSTGRES_DB: "$POSTGRES_DB"
+                env_file:
+                  - stack.env
                 volumes:
                   - gridbot-pgdata:/var/lib/postgresql/data
                 networks:
@@ -325,36 +373,8 @@ jobs:
                     condition: service_healthy
                   redis:
                     condition: service_healthy
-                environment:
-                  HOST: 0.0.0.0
-                  PORT: "8000"
-                  SITE_URL: "$SITE_URL"
-                  CORS_ORIGINS: "$CORS_ORIGINS"
-                  DATABASE_URL: "postgresql+asyncpg://$POSTGRES_USER:$POSTGRES_PASSWORD_ENC@db:5432/$POSTGRES_DB"
-                  REDIS_URL: redis://redis:6379/0
-                  CREDENTIALS_ENCRYPTION_KEY: "$CREDENTIALS_ENCRYPTION_KEY"
-                  ADMIN_EMAIL: "$ADMIN_EMAIL"
-                  ADMIN_PASSWORD: "$ADMIN_PASSWORD"
-                  JWT_SECRET: "$JWT_SECRET"
-                  TRADING_MODE: "$TRADING_MODE"
-                  SYMBOLS: "$SYMBOLS"
-                  FUTURES_ENABLED: "$FUTURES_ENABLED"
-                  FUTURES_LEVERAGE: "$FUTURES_LEVERAGE"
-                  RISK_PER_TRADE_PCT: "$RISK_PER_TRADE_PCT"
-                  MAX_DAILY_LOSS_PCT: "$MAX_DAILY_LOSS_PCT"
-                  MAX_POSITIONS: "$MAX_POSITIONS"
-                  MINIMUM_SIGNAL_SCORE: "$MINIMUM_SIGNAL_SCORE"
-                  TAKER_FEE_PCT: "$TAKER_FEE_PCT"
-                  SLIPPAGE_PCT: "$SLIPPAGE_PCT"
-                  BINANCE_API_KEY: "$BINANCE_API_KEY"
-                  BINANCE_API_SECRET: "$BINANCE_API_SECRET"
-                  BINANCE_PROXY: "$BINANCE_PROXY"
-                  HTTPS_PROXY: "$HTTPS_PROXY"
-                  ANTHROPIC_API_KEY: "$ANTHROPIC_API_KEY"
-                  ANTHROPIC_MODEL: "$ANTHROPIC_MODEL"
-                  TELEGRAM_BOT_TOKEN: "$TELEGRAM_BOT_TOKEN"
-                  TELEGRAM_CHAT_ID: "$TELEGRAM_CHAT_ID"
-                  ALERT_WEBHOOK_URL: "$ALERT_WEBHOOK_URL"
+                env_file:
+                  - stack.env
                 networks:
                   - web
                 labels:
