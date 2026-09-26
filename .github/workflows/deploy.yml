@@ -228,10 +228,39 @@ jobs:
             if [ "$RESET_DATABASE" = "true" ]; then
               echo "=== RESET: backing up, then deleting the Postgres volume ==="
               STAMP=$(date +%Y%m%d-%H%M%S)
-              # Best effort: the old stack is already down, so bring Postgres up alone to dump it.
-              echo "$VPS_PASSWORD" | sudo -S docker run --rm -v gridbot-pgdata:/var/lib/postgresql/data -v "$PWD":/backup alpine tar czf "/backup/pgdata-backup-$STAMP.tar.gz" -C /var/lib/postgresql data && echo "Volume archived to $PWD/pgdata-backup-$STAMP.tar.gz" || echo "WARNING: could not archive the volume (it may not exist yet)"
 
-              echo "$VPS_PASSWORD" | sudo -S docker volume rm gridbot-pgdata 2>/dev/null && echo "Volume gridbot-pgdata deleted." || echo "Volume gridbot-pgdata not present."
+              # Compose prefixes project volumes with the project name, so the
+              # real volume is <project>_gridbot-pgdata. Resolve it rather than
+              # guessing: naming it wrong would silently create a new empty
+              # volume, "back that up", and leave the real data in place.
+              VOL=$(echo "$VPS_PASSWORD" | sudo -S docker volume ls -q | grep -E '(^|_)gridbot-pgdata$' | head -n1)
+
+              if [ -z "$VOL" ]; then
+                echo "No gridbot-pgdata volume found; nothing to reset."
+              else
+                echo "Resolved volume: $VOL"
+                if echo "$VPS_PASSWORD" | sudo -S docker run --rm -v "$VOL":/var/lib/postgresql/data -v "$PWD":/backup alpine tar czf "/backup/pgdata-backup-$STAMP.tar.gz" -C /var/lib/postgresql data; then
+                  ls -lh "pgdata-backup-$STAMP.tar.gz"
+                  echo "Volume archived to $PWD/pgdata-backup-$STAMP.tar.gz"
+                else
+                  echo "ERROR: could not archive $VOL. Refusing to delete it."
+                  exit 1
+                fi
+
+                if echo "$VPS_PASSWORD" | sudo -S docker volume rm "$VOL"; then
+                  echo "Volume $VOL deleted."
+                else
+                  echo "Direct removal failed; retrying via compose down -v"
+                  echo "$VPS_PASSWORD" | sudo -S docker compose down -v --remove-orphans || true
+                  echo "$VPS_PASSWORD" | sudo -S docker volume rm "$VOL" || true
+                fi
+
+                if echo "$VPS_PASSWORD" | sudo -S docker volume ls -q | grep -qE '(^|_)gridbot-pgdata$'; then
+                  echo "ERROR: the volume still exists after the reset. Aborting."
+                  exit 1
+                fi
+                echo "Reset complete: the database will be created from scratch."
+              fi
             fi
 
             echo "$VPS_PASSWORD" | sudo -S docker network create web 2>/dev/null || true
