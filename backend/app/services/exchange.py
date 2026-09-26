@@ -79,16 +79,30 @@ class BinanceExchange:
         self._leverage_set: set[str] = set()
 
     # ---------------------------------------------------------------- setup --
-    def _build(self) -> ccxt.binance:
+    def _build(self, authenticated: bool | None = None) -> ccxt.binance:
+        """Build a ccxt client.
+
+        Credentials are attached only when the mode actually places orders.
+        Paper and backtest modes then use public endpoints exclusively, which
+        matters because ccxt signs requests whenever keys are present — and
+        Binance blocks signed `sapi` calls from restricted regions (HTTP 451)
+        even when public market data is reachable.
+        """
         settings = get_settings()
+        if authenticated is None:
+            authenticated = settings.places_real_orders
+
         opts: dict[str, Any] = {
-            "apiKey": settings.binance_api_key or None,
-            "secret": settings.binance_api_secret or None,
+            "apiKey": (settings.binance_api_key or None) if authenticated else None,
+            "secret": (settings.binance_api_secret or None) if authenticated else None,
             "enableRateLimit": True,
             "options": {
                 "defaultType": "future" if settings.futures_enabled else "spot",
                 "adjustForTimeDifference": True,
                 "recvWindow": 10000,
+                # load_markets() otherwise calls the signed sapi currencies
+                # endpoint. Nothing here needs currency metadata.
+                "fetchCurrencies": False,
             },
         }
         proxy = settings.effective_binance_proxy
@@ -202,13 +216,28 @@ class BinanceExchange:
         )
 
     async def validate_credentials(self) -> dict[str, Any]:
-        """Check keys work and report the permissions Binance grants them."""
+        """Check keys work and report the permissions Binance grants them.
+
+        Uses its own short-lived authenticated client, so validation works from
+        paper mode without giving the shared client credentials it would then
+        attach to every public request.
+        """
         result: dict[str, Any] = {"valid": False, "can_trade": False, "can_withdraw": None}
+        if not self.has_credentials():
+            result["error"] = "No Binance API key and secret are configured"
+            return result
+
+        client = self._build(authenticated=True)
         try:
-            balance = await self.fetch_balance()
-        except RuntimeError as exc:
+            balance = await client.fetch_balance()
+        except BaseError as exc:
+            result["error"] = f"{exc}{binance_error_hint(exc)}"
+            return result
+        except Exception as exc:  # noqa: BLE001
             result["error"] = str(exc)
             return result
+        finally:
+            await client.close()
         result["valid"] = True
         info = balance.get("info") or {}
         if "canTrade" in info:
