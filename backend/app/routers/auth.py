@@ -7,14 +7,20 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import create_access_token, get_current_user, verify_password
+from app.auth import (
+    audit,
+    consume_refresh_token,
+    create_access_token,
+    get_current_user,
+    issue_refresh_token,
+    verify_password,
+)
 from app.config import get_settings
 from app.db import get_db
 from app.models import User
-from app.schemas import TokenResponse
+from app.schemas import RefreshRequest, TokenResponse, UserOut
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-settings = get_settings()
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -22,8 +28,10 @@ async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
-    result = await db.execute(select(User).where(User.email == form_data.username))
-    user = result.scalar_one_or_none()
+    settings = get_settings()
+    user = (
+        await db.execute(select(User).where(User.email == form_data.username))
+    ).scalar_one_or_none()
     now = datetime.now(timezone.utc)
 
     if user and user.locked_until and user.locked_until > now:
@@ -43,11 +51,26 @@ async def login(
 
     user.failed_logins = 0
     user.locked_until = None
+    refresh = await issue_refresh_token(db, user)
+    await audit(db, user, "login")
     await db.commit()
-    token = create_access_token(user.email)
-    return TokenResponse(access_token=token)
+    return TokenResponse(
+        access_token=create_access_token(user.email, user.role), refresh_token=refresh
+    )
 
 
-@router.get("/me")
-async def me(user: User = Depends(get_current_user)) -> dict:
-    return {"email": user.email, "id": user.id}
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_token(
+    payload: RefreshRequest, db: AsyncSession = Depends(get_db)
+) -> TokenResponse:
+    user = await consume_refresh_token(db, payload.refresh_token)
+    new_refresh = await issue_refresh_token(db, user)
+    await db.commit()
+    return TokenResponse(
+        access_token=create_access_token(user.email, user.role), refresh_token=new_refresh
+    )
+
+
+@router.get("/me", response_model=UserOut)
+async def me(user: User = Depends(get_current_user)) -> User:
+    return user
