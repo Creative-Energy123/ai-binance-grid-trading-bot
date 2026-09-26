@@ -315,8 +315,15 @@ jobs:
             echo "$VPS_PASSWORD" | sudo -S docker compose up -d
 
             echo "=== Database migrations ==="
-            echo "$VPS_PASSWORD" | sudo -S docker compose exec -T scalper python -m alembic upgrade head || \
-              echo "Alembic run failed; the app creates missing tables at boot, but check this."
+            if echo "$VPS_PASSWORD" | sudo -S docker compose exec -T scalper python -m alembic upgrade head; then
+              echo "Migrations applied."
+            else
+              echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+              echo "!! MIGRATIONS DID NOT RUN. The app creates missing tables at  !!"
+              echo "!! boot, so a fresh install still works, but an UPGRADE to an !!"
+              echo "!! existing database will NOT pick up schema changes.         !!"
+              echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+            fi
 
             sleep 15
 

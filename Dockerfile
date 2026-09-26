@@ -21,6 +21,10 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/app ./app
+# Alembic runs from /app in the deployed container, so its config and revision
+# scripts have to ship with the image.
+COPY backend/alembic.ini ./alembic.ini
+COPY backend/migrations ./migrations
 COPY --from=frontend /frontend/dist ./static
 
 RUN chown -R scalper:scalper /app
