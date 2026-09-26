@@ -120,7 +120,8 @@ upgrades to an existing deployment.
 | Area | Endpoints |
 | --- | --- |
 | Auth | `POST /api/auth/login`, `POST /api/auth/refresh`, `GET /api/auth/me` |
-| Bot | `GET /api/bot/status`, `/overview`, `/positions`, `/evaluations`, `POST /start` `/pause` `/stop` `/close-all` `/emergency-stop` `/mode` `/confirm-live` `/risk-config` |
+| Account | `GET/POST /api/account/credentials`, `GET/POST /api/account/integrations`, `DELETE /api/account/integrations/{name}` |
+| Bot | `GET /api/bot/status`, `/overview`, `/positions`, `/evaluations`, `/config`, `POST /start` `/pause` `/stop` `/close-all` `/emergency-stop` `/mode` `/confirm-live` `/config` `/config/reset` |
 | Market | `GET /api/market/scan`, `/candles`, `/analysis/{symbol}` |
 | Journal | `GET /api/journal/trades`, `/trades.csv`, `/signals`, `/risk-events`, `/alerts`, `/performance` |
 | Research | `POST /api/research/backtest`, `GET /api/research/backtests` |
@@ -139,6 +140,30 @@ Interactive docs are at `/docs` when the backend runs.
 - Parameter optimisation is manual: the backtester provides the train /
   validation / out-of-sample split and the overfitting warning, but there is no
   automated search.
+
+## Configuration from the dashboard
+
+Everything an operator needs to change is editable under **Settings** by an admin,
+applied to the running engine immediately and persisted so it survives a restart:
+
+- **Mode** — backtest, paper, testnet or live.
+- **Symbols and timeframes**, validated so entry < setup < primary.
+- **Risk** — risk per trade, daily/weekly loss caps, position and trade-rate
+  limits, exposure caps, cooldown.
+- **Strategies** — enable or disable each one (the regime engine still gates them).
+- **Scoring** — the six component weights and the minimum score.
+- **Stops and targets** — stop mode, ATR multiplier, R multiples, partial close,
+  breakeven and trailing behaviour.
+- **Costs** — taker/maker fees and assumed slippage, which feed the reward/risk gate.
+- **Futures** — leverage, its hard cap and the minimum liquidation distance.
+- **API keys and integrations** — Binance credentials plus the Anthropic key,
+  Telegram token, alert webhook, SMTP password and Binance proxy. All are
+  AES-256-GCM encrypted at rest and only ever displayed masked.
+
+Changes that would leave open positions governed by rules they were not entered
+under — symbols, timeframes and futures settings — are refused while a position
+is open. `POST /api/bot/config/reset` drops every override and falls back to the
+deployed environment values.
 
 ## Security
 

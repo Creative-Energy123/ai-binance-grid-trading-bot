@@ -6,18 +6,19 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import audit, get_current_user, require_admin, require_trader
-from app.config import TRADING_MODES, get_settings
+from app.config import TRADING_MODES, get_settings, reload_settings
 from app.db import get_db
 from app.models import BotInstance, User
 from app.schemas import (
+    TIMEFRAMES,
     BotStatusOut,
+    ConfigIn,
     EmergencyStopIn,
     LiveConfirmIn,
     MessageOut,
     ModeChangeIn,
     OverviewOut,
     PositionOut,
-    RiskConfigIn,
 )
 from app.services import portfolio
 from app.services.engine import trading_engine
@@ -221,44 +222,120 @@ async def confirm_live(
     return _status(bot)
 
 
-@router.post("/risk-config", response_model=MessageOut)
-async def update_risk(
-    payload: RiskConfigIn,
+EDITABLE_FIELDS = tuple(ConfigIn.model_fields.keys())
+
+# Changing these mid-flight would leave open positions being managed by rules
+# they were not entered under.
+REQUIRES_FLAT = {
+    "symbols",
+    "timeframe_primary",
+    "timeframe_setup",
+    "timeframe_entry",
+    "futures_enabled",
+    "futures_leverage",
+}
+
+
+def _current_config() -> dict:
+    settings = get_settings()
+    return {field: getattr(settings, field) for field in EDITABLE_FIELDS}
+
+
+@router.get("/config")
+async def read_config(_: User = Depends(get_current_user)) -> dict:
+    """Current values plus the metadata the settings UI needs to render them."""
+    settings = get_settings()
+    return {
+        "values": _current_config(),
+        "meta": {
+            "timeframes": list(TIMEFRAMES),
+            "modes": list(TRADING_MODES),
+            "stop_modes": ["atr", "structure", "fixed"],
+            "requires_flat": sorted(REQUIRES_FLAT),
+            "round_trip_cost_pct": settings.round_trip_cost_pct,
+            "normalised_weights": settings.score_weights,
+        },
+    }
+
+
+@router.post("/config", response_model=MessageOut)
+async def update_config(
+    payload: ConfigIn,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_admin),
 ):
+    """Apply configuration to the running engine and persist it on the bot row
+    so it survives a restart."""
     settings = get_settings()
     bot = await portfolio.get_bot(db)
     changes = payload.model_dump(exclude_none=True)
+    if not changes:
+        raise HTTPException(status_code=400, detail="No settings were supplied")
+
+    # Only count fields that actually differ, so re-saving an unchanged form
+    # does not trip the open-position guard.
+    current = _current_config()
+    changes = {k: v for k, v in changes.items() if current.get(k) != v}
+    if not changes:
+        return MessageOut(message="No changes", data={})
+
+    structural = REQUIRES_FLAT & changes.keys()
+    if structural:
+        open_count = len(await portfolio.open_positions(db))
+        if open_count:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Close the {open_count} open position(s) before changing "
+                    f"{', '.join(sorted(structural))} — open trades would then be managed "
+                    "under rules they were not entered under."
+                ),
+            )
+
     for key, value in changes.items():
         setattr(settings, key, value)
     bot.config_overrides = {**(bot.config_overrides or {}), **changes}
-    await audit(db, user, "risk_config", str(changes))
+
+    if "futures_enabled" in changes:
+        # Spot and futures are different ccxt clients.
+        await exchange.reset()
+
+    await audit(db, user, "config_update", str(changes))
     await db.commit()
-    return MessageOut(message="Risk configuration updated", data=changes)
+    return MessageOut(message=f"Updated {len(changes)} setting(s)", data=changes)
+
+
+@router.post("/config/reset", response_model=MessageOut)
+async def reset_config(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Drop every override and fall back to the deployed environment values."""
+    bot = await portfolio.get_bot(db)
+    removed = bot.config_overrides or {}
+    bot.config_overrides = {}
+    reloaded = reload_settings()
+    reloaded.trading_mode = bot.mode
+    await audit(db, user, "config_reset", str(removed))
+    await db.commit()
+    return MessageOut(
+        message="Configuration reset to the deployed environment values",
+        data={"cleared": list(removed)},
+    )
+
+
+@router.post("/risk-config", response_model=MessageOut)
+async def update_risk(
+    payload: ConfigIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Retained for older clients; /config supersedes it."""
+    return await update_config(payload, db, user)
 
 
 @router.get("/risk-config")
 async def read_risk(_: User = Depends(get_current_user)) -> dict:
     settings = get_settings()
-    return {
-        "risk_per_trade_pct": settings.risk_per_trade_pct,
-        "max_daily_loss_pct": settings.max_daily_loss_pct,
-        "max_weekly_loss_pct": settings.max_weekly_loss_pct,
-        "max_positions": settings.max_positions,
-        "max_consecutive_losses": settings.max_consecutive_losses,
-        "max_trades_per_hour": settings.max_trades_per_hour,
-        "max_symbol_exposure_pct": settings.max_symbol_exposure_pct,
-        "max_total_exposure_pct": settings.max_total_exposure_pct,
-        "loss_cooldown_minutes": settings.loss_cooldown_minutes,
-        "minimum_signal_score": settings.minimum_signal_score,
-        "score_weights": settings.score_weights,
-        "stop_mode": settings.stop_mode,
-        "atr_stop_multiplier": settings.atr_stop_multiplier,
-        "tp1_r_multiple": settings.tp1_r_multiple,
-        "tp2_r_multiple": settings.tp2_r_multiple,
-        "futures_enabled": settings.futures_enabled,
-        "futures_leverage": settings.futures_leverage,
-        "taker_fee_pct": settings.taker_fee_pct,
-        "slippage_pct": settings.slippage_pct,
-    }
+    values = _current_config()
+    return {**values, "score_weights": settings.score_weights}

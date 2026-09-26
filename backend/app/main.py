@@ -17,6 +17,7 @@ from app.db import SessionLocal, init_db
 from app.routers import account, ai, auth, bot, journal, market, research
 from app.schemas import HealthComponentOut, HealthOut
 from app.services import portfolio
+from app.services import secrets as secret_store
 from app.services.engine import trading_engine
 from app.services.exchange import exchange
 
@@ -37,6 +38,9 @@ async def _restore_runtime_config() -> None:
             if hasattr(settings, key):
                 setattr(settings, key, value)
         settings.trading_mode = bot_row.mode
+        applied = await secret_store.load_into_settings(db)
+        if applied:
+            logger.info("Loaded %d stored integration secret(s)", len(applied))
         # A restart never resumes trading on its own.
         bot_row.running = False
         bot_row.status_message = "Stopped (service restarted)"

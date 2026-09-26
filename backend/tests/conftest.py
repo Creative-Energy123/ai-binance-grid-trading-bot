@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import math
 import os
 import random
@@ -15,7 +16,11 @@ os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{ROOT / '.pytest-api
 os.environ.setdefault("ADMIN_EMAIL", "admin@test.local")
 os.environ.setdefault("ADMIN_PASSWORD", "test-password-123")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-that-is-long-enough-123456")
-os.environ.setdefault("CREDENTIALS_ENCRYPTION_KEY", "")
+# A throwaway AES-256 key so the credential-encryption paths are exercised.
+os.environ.setdefault(
+    "CREDENTIALS_ENCRYPTION_KEY",
+    base64.urlsafe_b64encode(b"test-key-for-pytest-only-32bytes").decode(),
+)
 
 MINUTE_MS = 60_000
 

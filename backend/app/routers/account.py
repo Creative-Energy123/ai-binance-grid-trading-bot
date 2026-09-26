@@ -10,8 +10,15 @@ from app.auth import audit, get_current_user, require_admin
 from app.config import get_settings
 from app.db import get_db
 from app.models import ExchangeAccount, User
-from app.schemas import CredentialsIn, CredentialsOut, MessageOut
+from app.schemas import (
+    CredentialsIn,
+    CredentialsOut,
+    IntegrationSecretIn,
+    IntegrationSecretOut,
+    MessageOut,
+)
 from app.security import CredentialCipherError, encrypt_secret, mask_key
+from app.services import secrets as secret_store
 from app.services.exchange import exchange
 
 router = APIRouter(prefix="/api/account", tags=["account"])
@@ -123,3 +130,49 @@ async def balance(_: User = Depends(get_current_user)) -> dict:
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"configured": True, "equity_usdt": equity, "warning": WITHDRAWAL_WARNING}
+
+
+@router.get("/integrations", response_model=list[IntegrationSecretOut])
+async def list_integrations(
+    db: AsyncSession = Depends(get_db), _: User = Depends(require_admin)
+):
+    """Which third-party credentials are set, and where they came from. Values
+    are never returned — only a masked fragment."""
+    return await secret_store.status(db)
+
+
+@router.post("/integrations", response_model=MessageOut)
+async def set_integration(
+    payload: IntegrationSecretIn,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    try:
+        row = await secret_store.set_secret(db, payload.name, payload.value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CredentialCipherError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    if payload.name == "binance_proxy":
+        await exchange.reset()  # the proxy is applied when the client is built
+
+    await audit(db, user, "integration_set", payload.name)
+    await db.commit()
+    return MessageOut(message=f"{payload.name} saved", data={"masked": row.masked})
+
+
+@router.delete("/integrations/{name}", response_model=MessageOut)
+async def delete_integration(
+    name: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    if name not in secret_store.SECRET_FIELDS:
+        raise HTTPException(status_code=404, detail=f"{name} is not an integration secret")
+    removed = await secret_store.clear_secret(db, name)
+    if name == "binance_proxy":
+        await exchange.reset()
+    await audit(db, user, "integration_cleared", name)
+    await db.commit()
+    return MessageOut(message=f"{name} cleared" if removed else f"{name} was not set")

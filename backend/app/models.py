@@ -103,6 +103,21 @@ class ExchangeAccount(Base):
 # --------------------------------------------------------------------------- #
 # Reference data
 # --------------------------------------------------------------------------- #
+class IntegrationSecret(Base):
+    """Third-party credentials (Anthropic, Telegram, SMTP, proxy) set from the
+    dashboard. Values are AES-256-GCM encrypted and only ever returned masked."""
+
+    __tablename__ = "integration_secrets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    value_encrypted: Mapped[str] = mapped_column(Text)
+    masked: Mapped[str] = mapped_column(String(64), default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class Symbol(Base):
     __tablename__ = "symbols"
 
